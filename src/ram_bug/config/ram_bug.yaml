@@ -1,0 +1,26 @@
+# RAM-Bug node parameters (TurtleBot3 Burger, ROS 2 Jazzy). Units: metres, radians, seconds.
+ram_bug:
+  ros__parameters:
+    # competition rules
+    capture_r: 0.30          # caught when centres are this close
+    time_limit: 75.0         # stop after this many seconds (time up = draw)
+    # driving
+    max_lin: 0.20            # m/s  (Burger max 0.22; the planner assumes 0.2 m/s)
+    max_ang: 2.5             # rad/s (Burger max 2.84)
+    k_ang: 3.0               # heading gain
+    lookahead_cells: 3       # aim this many 0.1 m cells ahead on the path
+    stop_dist: 0.13          # stop driving forward if something is closer in front
+    stuck_time: 2.0          # no progress for this long -> back up and turn
+    # map / perception
+    inflate_cells: 1         # grow obstacles by 0.1 m for the robot body
+    robot_max_cells: 4       # a LiDAR blob this small (cells) can be the other robot
+    robot_max_extent: 3      # ... and at most this wide (cells, 0.3 m)
+    motion_min_free: 2       # a cell must be seen empty this many scans before "it moved there"
+    laser_x_offset: -0.032   # LDS position behind base_footprint
+    max_free_range: 3.0
+    # loops
+    plan_period: 0.5         # RAM-Bug decision rate (matches the simulator tick)
+    control_period: 0.05
+    cmd_vel_stamped: auto    # auto / true / false
+    params_file: ""          # empty = share/ram_bug/config/best_params.json
+    autostart: true

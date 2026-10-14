@@ -1,0 +1,76 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 6
+      Offset: {X: 1.5, Y: 1.5, Z: 0}
+      Reference Frame: arena
+    - Class: rviz_default_plugins/Map
+      Name: RAM-Bug map
+      Enabled: true
+      Topic:
+        Value: /ram_bug/map
+      Alpha: 0.6
+      Color Scheme: map
+    - Class: rviz_default_plugins/LaserScan
+      Name: LiDAR
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+      Size (m): 0.03
+      Color Transformer: FlatColor
+      Color: 255; 255; 0
+    - Class: rviz_default_plugins/RobotModel
+      Name: TurtleBot3
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+    - Class: rviz_default_plugins/Path
+      Name: Planned path
+      Enabled: true
+      Topic:
+        Value: /ram_bug/path
+      Color: 0; 255; 0
+    - Class: rviz_default_plugins/PointStamped
+      Name: Chaser estimate
+      Enabled: true
+      Topic:
+        Value: /ram_bug/chaser
+      Color: 255; 0; 0
+      Radius: 0.08
+    - Class: rviz_default_plugins/PointStamped
+      Name: Target
+      Enabled: true
+      Topic:
+        Value: /ram_bug/target
+      Color: 0; 200; 255
+      Radius: 0.04
+    - Class: rviz_default_plugins/PoseArray
+      Name: Trap particles (sim only)
+      Enabled: true
+      Topic:
+        Value: /chaser/particles
+      Shape: Arrow (Flat)
+      Color: 255; 100; 150
+  Global Options:
+    Fixed Frame: arena
+    Background Color: 30; 30; 40
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      X: 1.5
+      Y: 1.5
+      Scale: 150

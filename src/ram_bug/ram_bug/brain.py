@@ -31,10 +31,17 @@ class RosRAMBug(eg.RAMBug):
     Keeps the raw obstacle cells separate and plans on an inflated copy so the
     0.14 m wide Burger does not scrape boxes."""
 
-    def __init__(self, params, inflate=1):
+    def __init__(self, params, inflate=1, detect="lidar", forget_ticks=12, motion_confirm=True,
+                 shape_detect=False):
         super().__init__(params)
         self.inflate = inflate
         self._scan = (set(), set())
+        self.detect = detect                  # "lidar" or "off" (no LiDAR chaser detection)
+        self.forget_ticks = forget_ticks      # drop a LiDAR estimate not seen for this many plans
+        self.motion_confirm = motion_confirm
+        self.pending_motion = None
+        self.shape_detect = shape_detect      # also accept a small STILL blob as the chaser
+        self.turning = False                  # set by Brain: no chaser detection while turning fast
 
     def reset(self, goal, capture_cells):
         super().reset(goal, capture_cells)
@@ -42,6 +49,36 @@ class RosRAMBug(eg.RAMBug):
 
     def set_scan(self, hits, free):
         self._scan = (hits, free)
+
+    def perceive_chaser(self, hits):
+        """Stricter version for the real robot (LiDAR noise, odometry lag):
+        - ignore returns on the arena border (walls, people standing outside)
+        - a "motion" detection must not touch a known obstacle (a box edge that jitters
+          between two cells looks like motion) and must be seen in 2 scans in a row."""
+        if self.detect == "off" or (self.turning and self.ch_est is None):
+            return None, set(), ""
+        inner = {c for c in hits if 0 < eg.xy(c)[0] < eg.W - 1 and 0 < eg.xy(c)[1] < eg.H - 1}
+        cell, group, how = super().perceive_chaser(inner)
+        if how in ("shape", "?") and not self.shape_detect and not (
+                self.ch_est is not None and cell is not None and eg.cdist(cell, self.ch_est) <= 2):
+            # a small still blob is usually a box corner / chair leg: treat it as a wall
+            return None, set(), ""
+        if how != "motion" or not self.motion_confirm:
+            if how != "motion":
+                self.pending_motion = None
+            return cell, group, how
+        if self.ch_est is not None and self.ch_age == 0 and eg.cdist(cell, self.ch_est) <= 2:
+            return cell, group, how                        # already tracking it
+        x, y = eg.xy(cell)
+        touching = any(eg.idx(x + dx, y + dy) in self.known and eg.idx(x + dx, y + dy) not in self.robot_cells
+                       for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                       if (dx or dy) and 0 <= x + dx < eg.W and 0 <= y + dy < eg.H)
+        confirmed = self.pending_motion is not None and eg.cdist(cell, self.pending_motion) <= 2
+        self.pending_motion = cell
+        if touching or not confirmed:
+            return None, set(group), "?"
+        self.pending_motion = None
+        return cell, group, how
 
     def _inflated(self, me):
         if self.inflate <= 0:
@@ -75,6 +112,10 @@ class RosRAMBug(eg.RAMBug):
             out = self.sense_shared(me, hits, free, (), eg.cell_of(peer), peer)
         else:
             out = self.sense_scan(me, hits, free)
+            if self.ch_est is not None and self.ch_age >= self.forget_ticks:
+                # not seen for a while: probably a false detection -> forget it
+                self.robot_cells.discard(self.ch_est)
+                self.ch_est, self.ch_age, self.detect_how, self.ever_moved = None, 0, "", False
         self.raw = self.known
         self.known = self._inflated(me)          # planning uses the inflated map
         self.d_goal = eg.dijkstra(self.goal, self.known)
@@ -148,7 +189,11 @@ class Brain:
         if cell is None:
             raise ValueError(f"goal ({gx:.2f}, {gy:.2f}) is outside the 3 x 3 m arena")
         self.goal = (gx, gy)
-        self.planner = RosRAMBug(self.params, inflate=self.cfg.get("inflate_cells", 1))
+        self.planner = RosRAMBug(self.params, inflate=self.cfg.get("inflate_cells", 1),
+                                 detect=str(self.cfg.get("detect_chaser", "lidar")).lower(),
+                                 forget_ticks=int(self.cfg.get("forget_ticks", 12)),
+                                 motion_confirm=bool(self.cfg.get("motion_confirm", True)),
+                                 shape_detect=bool(self.cfg.get("shape_detect", False)))
         self.planner.reset(cell, self.capture_cells)
         self.done = None
         self.t_start = None
@@ -183,8 +228,11 @@ class Brain:
         return hits, free
 
     # ------------------------------------------------------------ 2 Hz decision
-    def plan(self, x, y, yaw, scan, now):
-        """scan = (ranges, angle_min, angle_inc, range_min, range_max)."""
+    def plan(self, x, y, yaw, scan, now, scan_pose=None):
+        """scan = (ranges, angle_min, angle_inc, range_min, range_max).
+        scan_pose = (x, y, yaw, w) of the robot when that scan arrived (arena frame, w = turn
+        rate). The scan is projected from that pose; while the robot turns fast the scan is
+        smeared, so it is not used for the map / chaser detection at all."""
         if self.planner is None or self.done:
             return
         if self.t_start is None:
@@ -199,7 +247,10 @@ class Brain:
         if me is None:
             self.mode, self.target = "OUTSIDE", self.goal
             return
-        hits, free = self.scan_to_cells(x, y, yaw, *scan)
+        # turning fast smears the scan: still map with it, but do not look for a NEW chaser
+        self.planner.turning = scan_pose is not None and abs(scan_pose[3]) > self.cfg.get("turn_gate", 0.6)
+        sx_, sy_, syaw_ = scan_pose[:3] if scan_pose is not None else (x, y, yaw)
+        hits, free = self.scan_to_cells(sx_, sy_, syaw_, *scan)
         self.last_hits = hits
         self.planner.set_scan(hits, free)
         peer = None

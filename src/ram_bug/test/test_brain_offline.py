@@ -65,6 +65,8 @@ def run_round(seed, chaser_kind, cfg, tuned, verbose=False, share=None):
     syaw = rng.uniform(-math.pi, math.pi)
     gx, gy = [v * CELL for v in eg.center(goal)]
     cx, cy = [v * CELL for v in eg.center(cst)]
+    if chaser_kind == "None":                    # no chaser at all: must drive straight to the goal
+        cx, cy = -50.0, -50.0
     cyaw = math.atan2(sy - cy, sx - cx)          # the friend's robot starts facing us
     cfg = dict(cfg, start_x=sx, start_y=sy, start_yaw=syaw)
     brain = Brain(cfg, tuned)
@@ -79,6 +81,8 @@ def run_round(seed, chaser_kind, cfg, tuned, verbose=False, share=None):
         if 0 <= p[0] < ARENA and 0 <= p[1] < ARENA and eg.cell_of((p[0] / CELL, p[1] / CELL)) not in obst:
             particles.append(p)
     triggered = chaser_kind in ("Pursuit", "Friend")
+    if chaser_kind == "None":
+        triggered, particles = False, []
     field, field_cell = None, None
     us_prev, us_v, close = None, (0.0, 0.0), False
     dt = 0.05
@@ -93,7 +97,7 @@ def run_round(seed, chaser_kind, cfg, tuned, verbose=False, share=None):
             scan = (ranges, 0.0, math.radians(1.0), 0.12, 3.5)
             if share:                                   # UDP position from the chaser (+-2 cm noise)
                 brain.set_peer(cx + rng.gauss(0, 0.02), cy + rng.gauss(0, 0.02), t)
-            brain.plan(x, y, yaw, scan, t)
+            brain.plan(x, y, yaw, scan, t, (x, y, yaw, w))
             if brain.done:
                 return brain.done, t
         front = min([r for k, r in enumerate(scan[0]) if k <= 30 or k >= 330] + [9.9])
@@ -153,7 +157,7 @@ def run_round(seed, chaser_kind, cfg, tuned, verbose=False, share=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=20)
-    ap.add_argument("--chaser", default="both", choices=["both", "Friend", "Trap", "Pursuit"])
+    ap.add_argument("--chaser", default="both", choices=["both", "Friend", "Trap", "Pursuit", "None"])
     ap.add_argument("--no-share", action="store_true", help="Friend without position sharing (LiDAR only)")
     ap.add_argument("--margin", type=float, default=None, help="override plan_margin (m)")
     a = ap.parse_args()

@@ -43,6 +43,10 @@ class RamBugNode(Node):
         use_peer=True,                                     # use the chaser pose from peer_link_node
         peer_timeout=0.6,                                  # s; older than this -> fall back to LiDAR
         plan_margin=0.0,                                   # m added to capture_r when planning
+        detect_chaser="lidar",                             # lidar / off (off = test without a chaser)
+        turn_gate=0.6,                                     # rad/s; scans taken while turning faster are ignored
+        forget_ticks=12,                                   # forget a LiDAR chaser not seen for 12 plans (6 s)
+        motion_confirm=True,                               # a moving blob must be seen in 2 scans in a row
         autostart=True,
     )
 
@@ -123,10 +127,19 @@ class RamBugNode(Node):
     # ------------------------------------------------------------ inputs
     def on_odom(self, msg):
         p = msg.pose.pose
-        self.odom = (p.position.x, p.position.y, yaw_of(p.orientation))
+        yaw = yaw_of(p.orientation)
+        t = self.now()
+        prev = getattr(self, "_odom_prev", None)            # turn rate from successive odometry
+        if prev is not None and t - prev[1] > 1e-3:
+            w = math.atan2(math.sin(yaw - prev[0]), math.cos(yaw - prev[0])) / (t - prev[1])
+            self.odom_w = 0.5 * getattr(self, "odom_w", 0.0) + 0.5 * w
+        self._odom_prev = (yaw, t)
+        self.odom = (p.position.x, p.position.y, yaw)
 
     def on_scan(self, msg):
         self.scan = (list(msg.ranges), msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max)
+        # remember where we were when this scan arrived (the plan runs up to 0.5 s later)
+        self.scan_pose = None if self.odom is None else (*self.pose(), getattr(self, "odom_w", 0.0))
 
     def on_peer(self, msg):
         self.brain.set_peer(msg.pose.position.x, msg.pose.position.y, self.now())
@@ -164,7 +177,7 @@ class RamBugNode(Node):
             return
         x, y, yaw = self.pose()
         prev_done = self.brain.done
-        self.brain.plan(x, y, yaw, self.scan, self.now())
+        self.brain.plan(x, y, yaw, self.scan, self.now(), getattr(self, "scan_pose", None))
         if self.brain.done and not prev_done:
             res = {"reached": "WIN - reached the goal", "timeout": "DRAW - time is up"}[self.brain.done]
             self.get_logger().info(res)

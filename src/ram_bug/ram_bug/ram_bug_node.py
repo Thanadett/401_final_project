@@ -7,7 +7,9 @@ Publishes   /cmd_vel (Twist or TwistStamped, auto-detected)
             /ram_bug/path (Path), /ram_bug/chaser (PointStamped), /ram_bug/target (PointStamped)
 
 All positions are in the ARENA frame: origin at a corner of the 3 x 3 m arena.
-Tell the node where the robot starts with start_x, start_y, start_yaw.
+Tell the node where the robot starts with start_x, start_y, start_yaw, or set
+auto_start:=true: the robot stands still for ~1 s and finds the arena walls itself
+(auto_start.py), then publishes the arena -> odom transform. Then click 2D Goal Pose.
 """
 import json
 import math
@@ -22,6 +24,7 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
 from . import eg_core as eg
+from .auto_start import fit_arena, scan_points
 from .brain import Brain
 
 
@@ -48,6 +51,9 @@ class RamBugNode(Node):
         forget_ticks=12,                                   # forget a LiDAR chaser not seen for 12 plans (6 s)
         motion_confirm=True,                               # a moving blob must be seen in 2 scans in a row
         autostart=True,
+        auto_start=False,                                  # find start_x/y/yaw from the arena walls
+        auto_scans=5,                                      # still scans used for that
+        arena_size=3.0,
     )
 
     def __init__(self):
@@ -70,6 +76,12 @@ class RamBugNode(Node):
                 tuned = json.load(f)["params"]
             self.get_logger().info(f"loaded tuned parameters from {pf}")
         self.brain = Brain(cfg, tuned)
+        self.localized = not cfg["auto_start"]
+        self.auto_buf = []
+        self.pending_goal = None
+        self.tf_static = None
+        if cfg["auto_start"]:
+            self.get_logger().info("auto_start: keep the robot STILL - looking for the arena walls ...")
 
         self.odom = None
         self.scan = None
@@ -90,7 +102,10 @@ class RamBugNode(Node):
         self.create_timer(cfg["plan_period"], self.on_plan)
         self.create_timer(cfg["control_period"], self.on_control)
 
-        if not math.isnan(cfg["goal_x"]) and not math.isnan(cfg["goal_y"]):
+        if not self.localized:
+            if not math.isnan(cfg["goal_x"]) and not math.isnan(cfg["goal_y"]):
+                self.pending_goal = (cfg["goal_x"], cfg["goal_y"], "arena")
+        elif not math.isnan(cfg["goal_x"]) and not math.isnan(cfg["goal_y"]):
             self.start_goal(cfg["goal_x"], cfg["goal_y"])
         else:
             self.get_logger().info("waiting for a goal: set goal_x/goal_y or publish /goal_pose (RViz 2D Goal Pose)")
@@ -138,15 +153,69 @@ class RamBugNode(Node):
 
     def on_scan(self, msg):
         self.scan = (list(msg.ranges), msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max)
+        if not self.localized:
+            self.auto_localize()
+            return
         # remember where we were when this scan arrived (the plan runs up to 0.5 s later)
         self.scan_pose = None if self.odom is None else (*self.pose(), getattr(self, "odom_w", 0.0))
 
     def on_peer(self, msg):
         self.brain.set_peer(msg.pose.position.x, msg.pose.position.y, self.now())
 
+    # ------------------------------------------------------------ auto start
+    def auto_localize(self):
+        if self.odom is None:
+            return
+        if abs(getattr(self, "odom_w", 0.0)) > 0.05:
+            self.auto_buf = []                              # robot is turning: start again
+            return
+        self.auto_buf.append(scan_points(self.odom, *self.scan, laser_x=self.cfg["laser_x_offset"]))
+        if len(self.auto_buf) < self.cfg["auto_scans"]:
+            return
+        fit = fit_arena(self.auto_buf, size=self.cfg["arena_size"])
+        self.auto_buf = []
+        if fit is None:
+            self.get_logger().warn("auto_start: could not find the arena walls, trying again",
+                                   throttle_duration_sec=2.0)
+            return
+        for k in ("start_x", "start_y", "start_yaw"):
+            self.cfg[k] = fit[k]                            # Brain shares this dict
+        self.publish_arena_tf()
+        self.localized = True
+        x, y, yaw = self.pose()
+        self.get_logger().info(
+            f"auto_start: robot is at ({x:.2f}, {y:.2f}) m, heading {math.degrees(yaw):.0f} deg in the arena "
+            f"(walls found {fit['walls'][1] - fit['walls'][0]:.2f} x {fit['walls'][3] - fit['walls'][2]:.2f} m)")
+        if self.pending_goal is not None:
+            gx, gy, frame = self.pending_goal
+            self.pending_goal = None
+            if frame == "odom":
+                gx, gy, _ = self.brain.odom_to_arena(gx, gy, 0.0)
+            self.start_goal(gx, gy)
+        else:
+            self.get_logger().info("auto_start: now click 2D Goal Pose in RViz (Fixed Frame: arena)")
+
+    def publish_arena_tf(self):
+        from geometry_msgs.msg import TransformStamped
+        from tf2_ros import StaticTransformBroadcaster
+        if self.tf_static is None:
+            self.tf_static = StaticTransformBroadcaster(self)
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id, t.child_frame_id = "arena", "odom"
+        t.transform.translation.x = float(self.cfg["start_x"])
+        t.transform.translation.y = float(self.cfg["start_y"])
+        yaw = float(self.cfg["start_yaw"])
+        t.transform.rotation.z, t.transform.rotation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        self.tf_static.sendTransform(t)
+
     def on_goal(self, msg):
         x, y = msg.pose.position.x, msg.pose.position.y
         frame = msg.header.frame_id.lstrip("/")
+        if not self.localized:
+            self.pending_goal = (x, y, "odom" if frame == "odom" else "arena")
+            self.get_logger().info("goal saved - still looking for the arena walls (keep the robot still)")
+            return
         if frame == "odom":                                 # convert odom -> arena
             pose = self.brain.odom_to_arena(x, y, 0.0)
             x, y = pose[0], pose[1]

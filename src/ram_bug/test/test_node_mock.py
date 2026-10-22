@@ -127,6 +127,20 @@ def install_fakes():
     n.OccupancyGrid, n.Odometry, n.Path = OccupancyGrid, Odometry, Path
     mods["sensor_msgs.msg"].LaserScan = LaserScan
     mods["std_msgs.msg"].String = String
+    g.TransformStamped = msgtype("TransformStamped", header=Header, child_frame_id=str,
+                                  transform=msgtype("Transform", translation=Vec, rotation=Quat))
+    tf = types.ModuleType("tf2_ros")
+
+    class STB:
+        sent = []
+
+        def __init__(self, node):
+            pass
+
+        def sendTransform(self, t):
+            STB.sent.append(t)
+    tf.StaticTransformBroadcaster = STB
+    mods["tf2_ros"] = tf
     sys.modules.update(mods)
 
 
@@ -160,6 +174,26 @@ def main():
     assert known >= 8, "LiDAR did not map the box"
     assert node.brain.target is not None, "no target"
     print("OK")
+
+    # ---- auto_start: robot at (2.1, 0.7) facing 120 deg, nobody tells it where it is
+    RamBugNode.PARAMS = dict(RamBugNode.PARAMS, auto_start=True)
+    node = RamBugNode()
+    tx, ty, tyaw = 2.1, 0.7, math.radians(120)
+    node.subs["goal_pose"](PoseStamped(header=Header(frame_id="arena"), pose=Pose(position=Msg(x=0.5, y=2.5, z=0.0))))
+    for k in range(6):
+        node.get_clock().t = 0.2 * k
+        node.subs["odom"](Odometry())
+        sc = LaserScan(ranges=[raycast(tx - 0.032 * math.cos(tyaw), ty - 0.032 * math.sin(tyaw),
+                                       tyaw + math.radians(i), obst, 9, 9) for i in range(360)],
+                       angle_min=0.0, angle_increment=math.radians(1.0), range_min=0.12, range_max=3.5)
+        node.subs["scan"](sc)
+    assert node.localized, "auto_start did not localize"
+    x, y, yaw = node.pose()
+    cands = [(tx, ty), (3 - ty, tx), (3 - tx, 3 - ty), (ty, 3 - tx)]
+    err = min(math.hypot(x - a, y - b) for a, b in cands)
+    print(f"auto_start pose ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f} deg)  err {err:.3f} m  goal {node.brain.goal}")
+    assert err < 0.08 and node.brain.goal is not None
+    print("AUTO OK")
 
 
 if __name__ == "__main__":

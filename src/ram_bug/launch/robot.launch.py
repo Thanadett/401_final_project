@@ -26,20 +26,29 @@ from launch_ros.actions import Node
 def setup(context):
     share = get_package_share_directory("ram_bug")
     lc = context.launch_configurations
-    sx, sy, syaw = float(lc["start_x"]), float(lc["start_y"]), float(lc["start_yaw"])
-    out = [
-        Node(package="tf2_ros", executable="static_transform_publisher", name="arena_to_odom",
-             arguments=["--x", str(sx), "--y", str(sy), "--yaw", str(syaw),
-                        "--frame-id", "arena", "--child-frame-id", "odom"]),
+    auto = lc["start_x"].strip().lower() == "auto"
+    if auto:          # the node finds the start from the arena walls and publishes arena -> odom
+        sx, sy, syaw = 0.0, 0.0, 0.0
+        out = []
+    else:
+        sx, sy, syaw = float(lc["start_x"]), float(lc["start_y"]), float(lc["start_yaw"])
+        out = [Node(package="tf2_ros", executable="static_transform_publisher", name="arena_to_odom",
+                    arguments=["--x", str(sx), "--y", str(sy), "--yaw", str(syaw),
+                               "--frame-id", "arena", "--child-frame-id", "odom"])]
+    out += [
         Node(package="ram_bug", executable="ram_bug_node", name="ram_bug", output="screen",
              parameters=[os.path.join(share, "config", "ram_bug.yaml"),
                          {"start_x": sx, "start_y": sy, "start_yaw": syaw,
                           "goal_x": float(lc["goal_x"]), "goal_y": float(lc["goal_y"]),
                           "capture_r": float(lc["capture_r"]),
                           "cmd_vel_stamped": lc["cmd_vel_stamped"],
-                          "detect_chaser": lc["detect_chaser"]}]),
+                          "detect_chaser": lc["detect_chaser"], "auto_start": auto}]),
     ]
-    if lc["share"] == "true":
+    if lc["share"] == "true" and auto:
+        from launch.actions import LogInfo
+        out.append(LogInfo(msg="share ignored with start_x:=auto (both teams must use the same measured "
+                               "arena corner) - give start_x/start_y/start_yaw to share positions"))
+    elif lc["share"] == "true":
         out.append(Node(
             package="ram_bug", executable="peer_link_node", name="peer_link", output="screen",
             parameters=[{"peer_host": lc["peer_host"], "send_port": int(lc["send_port"]),
@@ -55,7 +64,8 @@ def setup(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument("start_x", default_value="0.15"),
+        DeclareLaunchArgument("start_x", default_value="auto",
+                              description="'auto' = find the start from the arena walls, or metres"),
         DeclareLaunchArgument("start_y", default_value="0.15"),
         DeclareLaunchArgument("start_yaw", default_value="0.0"),
         DeclareLaunchArgument("goal_x", default_value="nan"),

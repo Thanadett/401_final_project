@@ -267,6 +267,20 @@ class Brain:
             self.target = self.goal                        # last few cm: drive straight onto the goal
             self.last_mode = self.mode
             return
+        if nxt == me and self.mode != "WAIT" and self.planner.d_goal[me] >= eg.INF:
+            # no path to the goal in our map (a wall line across the arena: usually a wrong
+            # start_x/start_y/start_yaw, or the goal is inside a box). Try without inflation,
+            # otherwise drive straight at the goal (stop_dist still prevents crashes).
+            raw = getattr(self.planner, "raw", set())
+            d = eg.dijkstra(self.planner.goal, raw - {me})
+            better = [c for c in eg.neighbours(me, raw) if d[c] < d[me]]
+            if better:
+                nxt = min(better, key=lambda c: d[c])
+                self.mode = "NO PATH (thin)"
+            else:
+                self.mode, self.target = "NO PATH -> straight", self.goal
+                self.last_mode = self.mode
+                return
         if self.mode == "WAIT" or nxt == me and len(path) < 2:
             self.target = None
             return

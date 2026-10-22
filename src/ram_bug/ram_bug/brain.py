@@ -70,7 +70,11 @@ class RosRAMBug(eg.RAMBug):
         me = eg.cell_of(view.e)
         hits, free = self._scan
         self.known = self.raw                    # perception works on the raw map
-        out = self.sense_scan(me, hits, free)
+        peer = getattr(view, "peer", None)       # (x, y) in cells from position sharing
+        if peer is not None:
+            out = self.sense_shared(me, hits, free, (), eg.cell_of(peer), peer)
+        else:
+            out = self.sense_scan(me, hits, free)
         self.raw = self.known
         self.known = self._inflated(me)          # planning uses the inflated map
         self.d_goal = eg.dijkstra(self.goal, self.known)
@@ -81,10 +85,11 @@ class RosRAMBug(eg.RAMBug):
 class View:
     """What eg_core expects from the 'world': our position (in cells) and obstacles."""
 
-    def __init__(self, e, obst):
+    def __init__(self, e, obst, peer=None):
         self.e = e
         self.obst = obst
         self.c = None
+        self.peer = peer
 
 
 class Brain:
@@ -96,7 +101,8 @@ class Brain:
                       robot_max_extent=cfg.get("robot_max_extent", 3),
                       motion_min_free=cfg.get("motion_min_free", 2)))
         self.params = p
-        self.capture_cells = cfg.get("capture_r", 0.30) / CELL
+        # plan with a bigger capture radius: the real robot must turn before it can flee
+        self.capture_cells = (cfg.get("capture_r", 0.30) + cfg.get("plan_margin", 0.0)) / CELL
         self.goal = None
         self.planner = None
         self.target = None          # (x, y) in arena metres
@@ -104,6 +110,8 @@ class Brain:
         self.done = None            # "reached" / "timeout"
         self.t_start = None
         self.last_hits = set()
+        self.peer = None            # (x, y, time) of the chaser from position sharing (arena metres)
+        self.peer_used = False
         self.last_mode = None
         self.last_v = 0.0
         self.stuck_ref = None
@@ -128,6 +136,11 @@ class Brain:
         if 0 <= i < eg.W and 0 <= j < eg.H:
             return eg.idx(i, j)
         return None
+
+    # ------------------------------------------------------------ position sharing
+    def set_peer(self, x, y, now):
+        """Chaser position received from the other robot (arena frame, metres)."""
+        self.peer = (x, y, now)
 
     # ------------------------------------------------------------ goal
     def set_goal(self, gx, gy):
@@ -189,7 +202,13 @@ class Brain:
         hits, free = self.scan_to_cells(x, y, yaw, *scan)
         self.last_hits = hits
         self.planner.set_scan(hits, free)
-        view = View((x / CELL, y / CELL), self.planner.known)
+        peer = None
+        if self.peer is not None and now - self.peer[2] <= self.cfg.get("peer_timeout", 0.6):
+            px, py = self.peer[0] / CELL, self.peer[1] / CELL
+            if 0 <= px < eg.W and 0 <= py < eg.H:
+                peer = (px, py)
+        self.peer_used = peer is not None
+        view = View((x / CELL, y / CELL), self.planner.known, peer)
         nxt = self.planner.act(view)
         self.mode = self.planner.mode
         path = self.planner.race_path or []
@@ -221,7 +240,7 @@ class Brain:
     def control(self, x, y, yaw, front_min, now=None):
         """Returns (v, w). front_min = closest LiDAR range in +-30 deg in front."""
         if self.target is None:
-            self.stuck_since = None
+            self.stuck_ref, self.stuck_since = None, None
             return 0.0, 0.0
         # stuck recovery: we keep asking to drive but do not move -> back up and turn
         if now is not None:
@@ -230,7 +249,7 @@ class Brain:
             if self.last_v > 0.05:
                 if self.stuck_ref is None or math.hypot(x - self.stuck_ref[0], y - self.stuck_ref[1]) > 0.03:
                     self.stuck_ref, self.stuck_since = (x, y), now
-                elif now - self.stuck_since > self.cfg.get("stuck_time", 2.0):
+                elif self.stuck_since is not None and now - self.stuck_since > self.cfg.get("stuck_time", 2.0):
                     self.recover_until = now + 0.6
                     self.stuck_ref, self.stuck_since = None, None
                     return -0.08, 1.2

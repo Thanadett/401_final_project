@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Make a random 3 x 3 m Gazebo (Harmonic) world for testing, like the competition:
-random boxes, our robot start, a goal, and the chaser starting >= 1.5 m from the goal.
+random boxes, our robot start, a goal, and the chaser starting in view 1-3 m away
+(--scenario trap: chaser starts >= 1.5 m from the goal).
 
   python3 tools/make_world.py --seed 7            -> worlds/arena_7.sdf + worlds/arena_7.json
   then rebuild:  colcon build --packages-select ram_bug
@@ -77,10 +78,10 @@ def chaser_model(x, y):
     </model>"""
 
 
-def make(seed, out_dir):
+def make(seed, out_dir, scenario="friend"):
     rng = random.Random(seed)
     while True:
-        obst, start, goal, cst = eg.random_round(rng)
+        obst, start, goal, cst = eg.random_round(rng, scenario)
         # keep robots and goal >= 0.2 m from the walls (the Burger is 0.14-0.18 m wide)
         if all(2 <= v <= eg.W - 3 for c in (start, goal, cst) for v in eg.xy(c)):
             break
@@ -137,6 +138,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, nargs="+", default=[1])
     ap.add_argument("--out", default=os.path.join(HERE, "..", "worlds"))
+    ap.add_argument("--scenario", default="friend", choices=["friend", "trap"],
+                    help="friend: chaser starts in view 1-3 m away (real match); trap: far from the goal")
     a = ap.parse_args()
     for s in a.seed:
-        make(s, a.out)
+        make(s, a.out, a.scenario)

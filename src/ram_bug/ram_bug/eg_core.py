@@ -212,7 +212,10 @@ def clusters(cells):
 
 
 # ------------------------------------------------------------------ random rounds
-def random_round(rng):
+def random_round(rng, scenario="trap"):
+    """scenario "trap"  : chaser starts >= 1.5 m from the goal (earlier assumption)
+       scenario "friend": the other team's real setup - chaser starts facing us with a
+                          clear line of sight, 1.0-3.0 m away; it does not know our goal"""
     for _ in range(1000):
         obst = set()
         for _b in range(rng.randint(4, 7)):
@@ -228,8 +231,13 @@ def random_round(rng):
         d = dijkstra(start, obst)
         if d[goal] >= INF:
             continue
-        cands = [i for i in range(N) if i not in obst and d[i] < INF
-                 and cdist(i, start) >= 12 and cdist(i, goal) >= FAR_FROM_GOAL]
+        if scenario == "friend":
+            cands = [i for i in range(N) if i not in obst and d[i] < INF
+                     and 10 <= cdist(i, start) <= 30 and cdist(i, goal) >= 6
+                     and line_of_sight(i, start, obst)]
+        else:
+            cands = [i for i in range(N) if i not in obst and d[i] < INF
+                     and cdist(i, start) >= 12 and cdist(i, goal) >= FAR_FROM_GOAL]
         if not cands:
             continue
         return obst, start, goal, rng.choice(cands)
@@ -239,6 +247,7 @@ def random_round(rng):
 # ================================================================== EVADERS
 class Evader:
     name = "evader"
+    p = {}                                   # tuning parameters (RAM-Bug fills these)
 
     def reset(self, goal, capture_cells):
         self.goal = goal
@@ -307,7 +316,22 @@ class Evader:
     def sense(self, rnd):
         me = cell_of(rnd.e)
         hits, free, ends = lidar_scan(me, rnd.obst, cell_of(rnd.c))
+        if getattr(rnd, "sharing", False):
+            # positions are shared over the network: we KNOW where the chaser is
+            return self.sense_shared(me, hits, free, ends, cell_of(rnd.c), rnd.c)
         return self.sense_scan(me, hits, free, ends, truth_cell=cell_of(rnd.c))
+
+    def sense_shared(self, me, hits, free, ends, peer_cell, peer_pos):
+        """Map from LiDAR, chaser position from the shared (UDP) message."""
+        near = {c for c in hits if cdist(c, peer_cell) <= 2}      # its own LiDAR blob is not a wall
+        prev = self.ch_est
+        self.sense_scan(me, hits - near, free - near, ends)
+        self.known -= near
+        self.robot_cells |= near
+        self.ch_est, self.ch_pos, self.ch_age, self.detect_how = peer_cell, peer_pos, 0, "shared"
+        if prev is not None and prev != peer_cell:
+            self.ever_moved = True
+        return me, prev, peer_cell
 
     def sense_scan(self, me, hits, free, ends=(), truth_cell=None):
         """Update map + chaser estimate from one LiDAR scan given as grid cells.
@@ -931,6 +955,46 @@ class TrapGoalChaser(TrapChaser):
     WAIT = "goal"
 
 
+class FriendChaser(Chaser):
+    """The other team's chaser (their code of Oct 2026, as described in their chat):
+    - knows our position and velocity (positions are shared over UDP), not our goal
+    - farther than 0.8 m: INTERCEPT, aim at p_evader + v_evader * t_intercept
+    - closer than 0.8 m: CHASE straight at us (small lead); back to intercept above 1.0 m
+    - our velocity is smoothed; below 0.10 m/s it aims at us directly
+    """
+    name = "Friend"
+    CHASE_IN, CHASE_OUT = 8.0, 10.0      # cells (0.8 m / 1.0 m)
+
+    def reset(self, rnd):
+        super().reset(rnd)
+        self.prev = None
+        self.v = (0.0, 0.0)
+        self.close = False
+
+    def act(self, rnd):
+        e = rnd.e
+        if self.prev is not None:
+            vx, vy = e[0] - self.prev[0], e[1] - self.prev[1]     # cells per tick
+            self.v = (0.6 * self.v[0] + 0.4 * vx, 0.6 * self.v[1] + 0.4 * vy)
+        self.prev = e
+        d = dist(e, rnd.c)
+        if d < self.CHASE_IN:
+            self.close = True
+        elif d > self.CHASE_OUT:
+            self.close = False
+        vx, vy = self.v
+        if math.hypot(vx, vy) < 0.5:          # < 0.1 m/s: treat as standing still
+            vx = vy = 0.0
+        t = 1.0 if self.close else d / STEP    # ticks to reach us
+        tx = min(W - 0.5, max(0.5, e[0] + vx * t))
+        ty = min(H - 0.5, max(0.5, e[1] + vy * t))
+        tgt = cell_of((tx, ty))
+        if tgt in rnd.obst:
+            tgt = cell_of(e)
+        self.mode = "CHASE" if self.close else "INTERCEPT"
+        return self.step_to(rnd, self.field(rnd, tgt), tie=cell_of(e))
+
+
 class RandomChaser(Chaser):
     name = "Random"
 
@@ -966,7 +1030,7 @@ class HumanChaser(Chaser):
 
 EVADERS = ["RAM-Bug", "AM-Bug", "A*-Replan", "APF"]
 ABLATION = ["RAM-Bug", "RAM-noOrbit", "RAM-noRace", "RAM-noTerr", "RAM-noBayes", "RAM-noDormant"]
-CHASERS = ["Pursuit", "Intercept", "Predict", "Guard", "Trap", "Trap-Goal", "Random", "Human"]
+CHASERS = ["Friend", "Pursuit", "Intercept", "Predict", "Guard", "Trap", "Trap-Goal", "Random", "Human"]
 
 
 def load_params():
@@ -1005,22 +1069,27 @@ def make_evader(kind, params=None):
 
 
 def make_chaser(kind):
-    return {"Pursuit": PursuitChaser, "Intercept": InterceptChaser, "Predict": PredictChaser,
+    return {"Friend": FriendChaser, "Pursuit": PursuitChaser, "Intercept": InterceptChaser, "Predict": PredictChaser,
             "Guard": GuardChaser, "Trap": TrapChaser, "Trap-Goal": TrapGoalChaser, "Random": RandomChaser, "Human": HumanChaser}[kind]()
 
 
 # ================================================================== round
 class Round:
     def __init__(self, evader, chaser, seed=0, capture_r=0.3, T=150, chaser_sight="omni",
-                 layout=None):
+                 layout=None, sharing=None, scenario=None):
+        """sharing: evader gets the chaser position from the network (default: on for Friend)
+           scenario: "friend" (chaser starts in view, 1-3 m away) or "trap" (default: by chaser)"""
         self.seed = seed
+        friend = getattr(chaser, "name", "") == "Friend"
+        self.sharing = friend if sharing is None else sharing
+        scenario = scenario or ("friend" if friend else "trap")
         self.rng = random.Random(seed)
         self.capture_r = capture_r
         self.capture_cells = capture_r / CELL
         self.T = T
         self.chaser_sight = chaser_sight
         if layout is None:
-            layout = random_round(self.rng)
+            layout = random_round(self.rng, scenario)
         self.obst, self.start, self.goal, self.c_start = layout
         self.evader, self.chaser = evader, chaser
         self.reset()

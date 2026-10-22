@@ -25,6 +25,7 @@ setup(
         "console_scripts": [
             "ram_bug_node = ram_bug.ram_bug_node:main",
             "trap_chaser_node = ram_bug.trap_chaser_node:main",
+            "peer_link_node = ram_bug.peer_link_node:main",
         ],
     },
 )

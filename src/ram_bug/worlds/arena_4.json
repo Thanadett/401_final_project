@@ -5,8 +5,8 @@
  "start_yaw": 0.0,
  "goal_x": 0.35000000000000003,
  "goal_y": 0.25,
- "chaser_x": 2.0500000000000003,
- "chaser_y": 0.75,
+ "chaser_x": 1.9500000000000002,
+ "chaser_y": 1.75,
  "obstacle_cells": [
   187,
   188,

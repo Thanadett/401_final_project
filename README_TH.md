@@ -38,13 +38,17 @@ source install/setup.bash
 ## 2. ทดสอบใน Gazebo ก่อน
 
 ```bash
-ros2 launch ram_bug sim.launch.py                         # สนาม arena_1, คนไล่แบบกับดัก
+ros2 launch ram_bug sim.launch.py                         # สนาม arena_1, คนไล่แบบทีมเพื่อน (intercept/chase + แชร์ตำแหน่ง UDP)
+ros2 launch ram_bug sim.launch.py share:=false            # ไม่แชร์ตำแหน่ง ใช้ LiDAR หาคนไล่อย่างเดียว
+ros2 launch ram_bug sim.launch.py chaser_mode:=trap       # คนไล่แบบกับดัก (รอที่ Goal)
 ros2 launch ram_bug sim.launch.py world:=arena_3          # สนามอื่น
 ros2 launch ram_bug sim.launch.py chaser_mode:=pursuit    # คนไล่วิ่งเข้าหาตั้งแต่ต้น
 ros2 launch ram_bug sim.launch.py goal_x:=nan             # รอให้กด 2D Goal Pose ใน RViz
 ```
 
-- คนไล่เป็นทรงกระบอกสีแดง รอจนเราเหยียบ particle รอบ Goal (ลูกศรชมพูใน RViz) แล้วจึงวิ่งเข้าหา
+- คนไล่เป็นทรงกระบอกสีแดง โหมด `friend` (ค่าเริ่มต้น) เลียนแบบโค้ดทีมเพื่อน: ไกลกว่า 0.8 m ดักหน้า (ตำแหน่ง + ความเร็ว × เวลา),
+  ใกล้กว่านั้นวิ่งเข้าหาตรง ๆ (hysteresis 1.0 m) และส่งตำแหน่งตัวเองทาง UDP พอร์ต 47002 เหมือนหุ่นจริง
+- `chaser_mode:=trap` รอจนเราเหยียบ particle รอบ Goal (ลูกศรชมพูใน RViz) แล้วจึงวิ่งเข้าหา
 - ดูผล: `ros2 topic echo /ram_bug/mode` (โหมดของเรา) และ `ros2 topic echo /chaser/state` (`CAUGHT` = โดนจับ)
 - สร้างสนามใหม่: `python3 src/ram_bug/tools/make_world.py --seed 7` แล้ว `colcon build` อีกครั้ง
 
@@ -63,6 +67,12 @@ ros2 launch ram_bug sim.launch.py goal_x:=nan             # รอให้ก�
    ros2 launch ram_bug robot.launch.py start_x:=1.5 start_y:=0.2 start_yaw:=1.5708 goal_x:=1.5 goal_y:=2.7
    ```
    หรือเว้น `goal_x`, `goal_y` ไว้ แล้วกด **2D Goal Pose** ใน RViz (`rviz:=true`)
+4. **แชร์ตำแหน่งกับทีมคนไล่** ใส่ `peer_host:=<IP ของ Pi คนไล่>` เพิ่มในคำสั่งข้อ 3
+   โหนด `peer_link` จะส่งตำแหน่งเรา (UDP 47001) และรับตำแหน่งคนไล่ (UDP 47002) บน Pi ของเราเอง
+   **ไม่ต้องให้รหัสผ่านหรือ SSH กับอีกทีม** รายละเอียดรูปแบบข้อความอยู่ใน `PROTOCOL_TH.md` (ส่งไฟล์นี้ให้ทีมเพื่อน)
+   - ถ้าได้ตำแหน่งจาก UDP: ใช้ตำแหน่งนั้นแทนการเดาจาก LiDAR (`/ram_bug/mode` จะขึ้น `chaser from shared`)
+   - ถ้าข้อความขาดเกิน 0.6 s: กลับไปใช้ LiDAR หาคนไล่เองอัตโนมัติ (`chaser from lidar`)
+   - เช็ค: `ros2 topic echo /ram_bug/peer_status`
 
 **ต้องเปิดโหนดนี้ใหม่ทุกรอบ** หุ่นต้องอยู่ที่จุดเริ่มตอนเปิด `turtlebot3_bringup` เพราะ odometry เริ่มนับจากตรงนั้น
 
@@ -71,6 +81,7 @@ ros2 launch ram_bug sim.launch.py goal_x:=nan             # รอให้ก�
 - [ ] ใส่ `start_x`, `start_y`, `start_yaw` ตรงกับที่วางจริง (ผิดไป 10 cm = Goal ผิดไป 10 cm)
 - [ ] เปิด RViz ดูว่า **แผนที่สีเทาซ้อนตรงกับจุด LiDAR** ถ้าเอียง แปลว่า `start_yaw` ผิด
 - [ ] ทดลองเดินไป Goal โดยไม่มีคนไล่ 1 รอบ
+- [ ] `/ram_bug/peer_status` ขึ้น `ok` และ `/ram_bug/peer_pose` ตรงกับตำแหน่งคนไล่จริง (ถ้าใช้การแชร์)
 - [ ] ถ้าหุ่นไม่ขยับเลย: ลอง `cmd_vel_stamped:=false` หรือ `true` (โหนดพยายามเดาให้เองอยู่แล้ว)
 
 ## 4. ค่าที่ควรปรับหน้างาน (`config/ram_bug.yaml`)
@@ -87,14 +98,29 @@ ros2 launch ram_bug sim.launch.py goal_x:=nan             # รอให้ก�
 
 ```bash
 python3 src/ram_bug/test/test_brain_offline.py     # หุ่นแบบล้อจริง + LiDAR จำลอง 360 ลำ
+python3 src/ram_bug/test/test_brain_offline.py --chaser Friend             # คนไล่แบบทีมเพื่อน + แชร์ตำแหน่ง
+python3 src/ram_bug/test/test_brain_offline.py --chaser Friend --no-share  # เทียบกับ LiDAR อย่างเดียว
 python3 src/ram_bug/test/test_node_mock.py         # เช็คว่า node รับ/ส่งข้อความถูก
+python3 src/ram_bug/test/test_peer_link.py         # เช็ค UDP รับ/ส่ง และรูปแบบข้อความ
 ```
 
-ผลทดสอบ offline (15 รอบ/แบบ): คนไล่แบบกับดัก **ถึง Goal 14/15 ไม่โดนจับ**, คนไล่วิ่งตรงเข้าหา ถึง Goal 10/15
-(ต่ำกว่าเกมจำลองแบบตาราง เพราะหุ่นจริงต้องหมุนตัวก่อนเปลี่ยนทิศ)
+ผลทดสอบ offline:
+
+| คนไล่ | แชร์ตำแหน่ง UDP | LiDAR อย่างเดียว |
+|---|---|---|
+| ทีมเพื่อน (intercept/chase, เริ่มห่าง 1-3 m หันหาเรา) 20 รอบ | **ถึง Goal 5-6/20** | ถึง Goal 2-3/20 |
+| กับดัก (รอที่ Goal) 15 รอบ | - | ถึง Goal 14/15 |
+| วิ่งตรงเข้าหา 15 รอบ | - | ถึง Goal 10/15 |
+
+- การแชร์ตำแหน่งช่วยได้ชัด (ราว 2 เท่า) เพราะรู้ตำแหน่งคนไล่ตลอด แม้ถูกกล่องบัง
+- คนไล่ของทีมเพื่อนเก่งมากเมื่อเริ่มอยู่ **ระหว่างเรากับ Goal** (ความเร็วเท่ากัน + ดักหน้า) รอบที่แพ้ส่วนใหญ่เป็นแบบนี้
+- ในเกมจำลองแบบตาราง (tune.py ฝึกกับคนไล่แบบเพื่อน) ได้ success 62% ค่าที่ฝึกแล้วอยู่ใน `config/best_params.json`
+  (ค่าเดิมที่ฝึกกับคนไล่แบบกับดักเก็บไว้ที่ `config/best_params_trap.json`)
 
 ## ข้อจำกัด / สิ่งที่ยังไม่ได้ทดสอบ
 - **ยังไม่ได้รันใน ROS 2 / Gazebo จริง** เครื่องที่ผมใช้ติดตั้ง ROS ไม่ได้ จึงทดสอบเฉพาะตรรกะด้วยตัวจำลองของผมเอง
   ถ้ารันแล้วเจอ error ส่งข้อความ error มาได้เลย
 - odometry ของหุ่นจริงคลาดสะสม (ล้อลื่น) ในสนาม 3 m ยังพอใช้ได้ แต่ถ้า Goal คลาดเกิน 10 cm ควรเช็คการวางหุ่นตอนเริ่ม
-- ถ้าคนไล่ยืนชิดกล่องตั้งแต่ต้น LiDAR จะแยกไม่ออกว่าเป็นหุ่น จนกว่ามันจะขยับ
+- ถ้าคนไล่ยืนชิดกล่องตั้งแต่ต้น LiDAR จะแยกไม่ออกว่าเป็นหุ่น จนกว่ามันจะขยับ (ปัญหานี้หายไปเมื่อแชร์ตำแหน่ง)
+- รูปแบบข้อความ UDP จริงของทีมเพื่อนยังไม่รู้แน่ (ไฟล์ tb3_connect.py ที่ได้มาเป็นแค่ตัวเช็ค SSH)
+  ตัวรับของเรารองรับหลายรูปแบบแล้ว แต่ควรให้ทีมเพื่อนส่งตาม `PROTOCOL_TH.md`

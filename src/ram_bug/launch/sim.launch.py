@@ -3,6 +3,7 @@ Gazebo (Harmonic) test: 3 x 3 m arena + our TurtleBot3 Burger + a trap chaser.
 
   ros2 launch ram_bug sim.launch.py                      # world arena_1
   ros2 launch ram_bug sim.launch.py world:=arena_3 chaser_mode:=pursuit
+  ros2 launch ram_bug sim.launch.py share:=false              # no position sharing: LiDAR only
   ros2 launch ram_bug sim.launch.py goal_x:=2.5 goal_y:=2.7   # override the goal
   ros2 launch ram_bug sim.launch.py goal_x:=nan               # wait for RViz 2D Goal Pose
 """
@@ -61,7 +62,13 @@ def setup(context):
                      "goal_y": goal_y if goal_y == goal_y else info["goal_y"],
                      "start_x": sx, "start_y": sy, "start_yaw": 0.0,
                      "mode": context.launch_configurations["chaser_mode"]}])
+    peer = Node(
+        package="ram_bug", executable="peer_link_node", name="peer_link", output="screen",
+        parameters=[{"use_sim_time": use_sim_time, "peer_host": "", "listen_port": 47002,
+                     "start_x": sx, "start_y": sy, "start_yaw": 0.0, "peer_frame": "arena"}])
     out = [gz, rsp, spawn, chaser_bridge, arena_tf, ram_bug, chaser]
+    if context.launch_configurations["share"] == "true":
+        out.append(peer)
     if context.launch_configurations["rviz"] == "true":
         out.append(Node(package="rviz2", executable="rviz2", arguments=["-d", os.path.join(share, "config", "ram_bug.rviz")],
                         parameters=[{"use_sim_time": use_sim_time}]))
@@ -74,7 +81,8 @@ def generate_launch_description():
         DeclareLaunchArgument("world", default_value="arena_1"),
         DeclareLaunchArgument("goal_x", default_value="", description="arena metres; empty = from world json"),
         DeclareLaunchArgument("goal_y", default_value=""),
-        DeclareLaunchArgument("chaser_mode", default_value="trap", description="trap or pursuit"),
+        DeclareLaunchArgument("chaser_mode", default_value="friend", description="friend, trap or pursuit"),
+        DeclareLaunchArgument("share", default_value="true", description="share positions over UDP (like the real match)"),
         DeclareLaunchArgument("rviz", default_value="true"),
         SetEnvironmentVariable("TURTLEBOT3_MODEL", "burger"),
         AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", os.path.join(tb3, "models")),

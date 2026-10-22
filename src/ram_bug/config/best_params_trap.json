@@ -1,0 +1,24 @@
+{
+  "params": {
+    "mu_min": 0.0,
+    "mu_max": 0.5,
+    "lam0": 0.27233706216211884,
+    "beta": 2.546412503653612,
+    "w_adv_margin": 0.8507059161289506,
+    "w_terr_goal": 0.2831143645889287,
+    "w_terr_size": 0.0,
+    "w_flee": 0.7672731897222707,
+    "w_wall": 0.712544506786752
+  },
+  "generation": 2,
+  "heldout_success": 0.86,
+  "heldout_caught": 0.14,
+  "capture_r": 0.3,
+  "chasers": [
+    "Trap",
+    "Trap",
+    "Pursuit",
+    "Intercept",
+    "Predict"
+  ]
+}

@@ -40,6 +40,9 @@ class RamBugNode(Node):
         plan_period=0.5, control_period=0.05,
         cmd_vel_stamped="auto",                            # auto / true / false
         params_file="",                                    # tuned RAM-Bug parameters (json)
+        use_peer=True,                                     # use the chaser pose from peer_link_node
+        peer_timeout=0.6,                                  # s; older than this -> fall back to LiDAR
+        plan_margin=0.0,                                   # m added to capture_r when planning
         autostart=True,
     )
 
@@ -73,6 +76,8 @@ class RamBugNode(Node):
         self.create_subscription(Odometry, "odom", self.on_odom, 10)
         self.create_subscription(LaserScan, "scan", self.on_scan, qos_profile_sensor_data)
         self.create_subscription(PoseStamped, "goal_pose", self.on_goal, 10)
+        if cfg["use_peer"]:
+            self.create_subscription(PoseStamped, "ram_bug/peer_pose", self.on_peer, 10)
         self.mode_pub = self.create_publisher(String, "ram_bug/mode", 10)
         self.map_pub = self.create_publisher(OccupancyGrid, "ram_bug/map", 1)
         self.path_pub = self.create_publisher(Path, "ram_bug/path", 1)
@@ -123,6 +128,9 @@ class RamBugNode(Node):
     def on_scan(self, msg):
         self.scan = (list(msg.ranges), msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max)
 
+    def on_peer(self, msg):
+        self.brain.set_peer(msg.pose.position.x, msg.pose.position.y, self.now())
+
     def on_goal(self, msg):
         x, y = msg.pose.position.x, msg.pose.position.y
         frame = msg.header.frame_id.lstrip("/")
@@ -160,7 +168,8 @@ class RamBugNode(Node):
         if self.brain.done and not prev_done:
             res = {"reached": "WIN - reached the goal", "timeout": "DRAW - time is up"}[self.brain.done]
             self.get_logger().info(res)
-        self.mode_pub.publish(String(data=self.brain.mode))
+        src = "shared" if self.brain.peer_used else "lidar"
+        self.mode_pub.publish(String(data=f"{self.brain.mode} (chaser from {src})"))
         self.publish_debug(x, y)
 
     def on_control(self):

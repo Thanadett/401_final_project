@@ -24,3 +24,7 @@ ram_bug:
     cmd_vel_stamped: auto    # auto / true / false
     params_file: ""          # empty = share/ram_bug/config/best_params.json
     autostart: true
+    # position sharing
+    use_peer: true           # use the chaser pose from peer_link_node when it is fresh
+    peer_timeout: 0.6        # s; older -> fall back to finding the chaser with LiDAR
+    plan_margin: 0.0         # m added to capture_r when planning (tested 0.1-0.3: no gain in sim)

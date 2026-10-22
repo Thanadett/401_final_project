@@ -1,9 +1,13 @@
 """
 trap_chaser_node - a TEST opponent for Gazebo (not used on the real robot)
 =========================================================================
-Behaves like the other team described: scatters 'particles' around the goal and
-waits; when our robot passes within `detect_r` of a particle it chases us at
-`speed` along the shortest path (it knows the obstacles from the world json).
+mode "friend"  (default) : like the other team's real chaser - knows our position
+                  (position sharing), farther than 0.8 m it INTERCEPTS (aims at
+                  p + v * t), closer it CHASES straight; it also sends its own pose
+                  over UDP like the real robot, so peer_link_node can be tested.
+mode "trap"    : waits until we cross 'particles' around the goal, then chases.
+mode "pursuit" : chases straight from the start.
+It knows the obstacles from the world json.
 
 The chaser in the world file is a red cylinder driven by gz VelocityControl
 (topic /model/chaser/cmd_vel) with an OdometryPublisher (topic /chaser/odom,
@@ -28,7 +32,8 @@ class TrapChaser(Node):
         super().__init__("trap_chaser")
         defaults = dict(world_json="", goal_x=1.5, goal_y=2.8, start_x=0.15, start_y=0.15,
                         start_yaw=0.0, particle_r=0.6, n_particles=40, detect_r=0.15,
-                        speed=0.20, capture_r=0.30, mode="trap", seed=1)
+                        speed=0.20, capture_r=0.30, mode="friend", seed=1,
+                        udp_host="127.0.0.1", udp_port=47002)
         for k, v in defaults.items():
             self.declare_parameter(k, v)
         P = {k: self.get_parameter(k).value for k in defaults}
@@ -46,7 +51,13 @@ class TrapChaser(Node):
             p = (gx + r * math.cos(a), gy + r * math.sin(a))
             if 0 <= p[0] < 3 and 0 <= p[1] < 3 and eg.cell_of((p[0] / 0.1, p[1] / 0.1)) not in self.obst:
                 self.particles.append(p)
-        self.triggered = P["mode"] == "pursuit"
+        self.triggered = P["mode"] in ("pursuit", "friend")
+        self.v = (0.0, 0.0)
+        self.prev_us = None
+        self.close = False
+        import socket
+        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.seq = 0
         self.me = None
         self.us = None
         self.over = False
@@ -85,6 +96,16 @@ class TrapChaser(Node):
             return
         x, y, yaw = self.me
         ux, uy = self.us
+        # share our pose like the real chaser does
+        if P_udp := self.P["udp_host"]:
+            import json
+            self.seq += 1
+            try:
+                self.udp.sendto(json.dumps({"team": "pursuer", "seq": self.seq, "frame": "arena",
+                                            "x": x, "y": y, "yaw": yaw}).encode(),
+                                (P_udp, int(self.P["udp_port"])))
+            except OSError:
+                pass
         if math.hypot(ux - x, uy - y) <= self.P["capture_r"]:
             self.over = True
             self.pub.publish(Twist())
@@ -99,7 +120,27 @@ class TrapChaser(Node):
                 self.pub.publish(Twist())
                 self.state_pub.publish(String(data="WAITING"))
                 return
-        # shortest path toward the evader on the true map
+        if self.P["mode"] == "friend":
+            now = self.get_clock().now().nanoseconds * 1e-9
+            if self.prev_us is not None and now > self.prev_us[2]:
+                dt = now - self.prev_us[2]
+                vx, vy = (ux - self.prev_us[0]) / dt, (uy - self.prev_us[1]) / dt
+                self.v = (0.85 * self.v[0] + 0.15 * vx, 0.85 * self.v[1] + 0.15 * vy)
+            self.prev_us = (ux, uy, now)
+            d = math.hypot(ux - x, uy - y)
+            if d < 0.8:
+                self.close = True
+            elif d > 1.0:
+                self.close = False
+            vx, vy = self.v
+            if math.hypot(vx, vy) < 0.10:
+                vx = vy = 0.0
+            t = 0.2 if self.close else d / self.P["speed"]
+            ux = min(2.95, max(0.05, ux + vx * t))
+            uy = min(2.95, max(0.05, uy + vy * t))
+            if eg.cell_of((ux / 0.1, uy / 0.1)) in self.obst:
+                ux, uy = self.us
+        # shortest path toward the evader (or the intercept point) on the true map
         uc = eg.cell_of((ux / 0.1, uy / 0.1))
         if uc != self.field_cell:
             self.field, self.field_cell = eg.dijkstra(uc, self.obst), uc

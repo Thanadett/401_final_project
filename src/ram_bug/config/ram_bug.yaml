@@ -9,6 +9,8 @@ ram_bug:
     max_ang: 2.5             # rad/s (Burger max 2.84)
     k_ang: 3.0               # heading gain
     lookahead_cells: 3       # aim this many 0.1 m cells ahead on the path
+    min_aim: 0.25            # never aim closer than this (m): avoids stop-and-go on short paths
+    smooth_deg: 15.0         # only average the target over changes smaller than this (deg)
     stop_dist: 0.13          # stop driving forward if something is closer in front
     stuck_time: 2.0          # no progress for this long -> back up and turn
     # map / perception

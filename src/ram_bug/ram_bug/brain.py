@@ -80,9 +80,13 @@ class RosRAMBug(eg.RAMBug):
         if self.ch_est is not None and self.ch_age == 0 and eg.cdist(cell, self.ch_est) <= 2:
             return cell, group, how                        # already tracking it
         x, y = eg.xy(cell)
-        touching = any(eg.idx(x + dx, y + dy) in self.known and eg.idx(x + dx, y + dy) not in self.robot_cells
-                       for dx in (-1, 0, 1) for dy in (-1, 0, 1)
-                       if (dx or dy) and 0 <= x + dx < eg.W and 0 <= y + dy < eg.H)
+        # Only a real box counts here. A stored "wall" cell that LiDAR saw empty before is
+        # something that moved in - usually the chaser itself, mapped while it stood still,
+        # whose old cells would otherwise veto every detection as it drives off.
+        need = self.p.get("motion_min_free", 1)
+        touching = any(n in self.known and n not in self.robot_cells and self.free_count.get(n, 0) < need
+                       for n in (eg.idx(x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                                 if (dx or dy) and 0 <= x + dx < eg.W and 0 <= y + dy < eg.H))
         confirmed = self.pending_motion is not None and eg.cdist(cell, self.pending_motion) <= 2
         self.pending_motion = cell
         if touching or not confirmed:

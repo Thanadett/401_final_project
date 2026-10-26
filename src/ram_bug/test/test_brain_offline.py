@@ -166,6 +166,46 @@ def test_no_chaser_drives_briskly():
         assert o == "reached" and t < 22.0, (s, o, t)
 
 
+def body_touches(x, y, yaw, obst, r=0.09):
+    """Real Burger footprint: ~0.09 m around the LDS, which sits 0.032 m behind base_footprint."""
+    cx, cy = x - 0.032 * math.cos(yaw), y - 0.032 * math.sin(yaw)
+    for k in range(16):
+        px, py = cx + r * math.cos(k * math.pi / 8), cy + r * math.sin(k * math.pi / 8)
+        if not (0 <= px < ARENA and 0 <= py < ARENA) or eg.cell_of((px / CELL, py / CELL)) in obst:
+            return True
+    return False
+
+
+def test_keeps_clear_of_walls_and_boxes():
+    """Once the robot body is clear of everything it must not touch a box or the arena wall
+    again (in these random layouts the start cell may already touch the wall)."""
+    cfg = dict(capture_r=0.30, max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, inflate_cells=1,
+               robot_max_cells=4, robot_max_extent=3, motion_min_free=2, time_limit=75.0,
+               laser_x_offset=-0.032, max_free_range=3.0, stop_dist=0.17, plan_margin=0.0)
+    with open(os.path.join(HERE, "..", "config", "best_params.json"), encoding="utf-8") as f:
+        tuned = json.load(f)["params"]
+    touched, clear = [], [False]
+    control = Brain.control
+
+    def watch(self, x, y, yaw, front, now=None):
+        if not body_touches(x, y, yaw, obst):
+            clear[0] = True
+        elif clear[0]:
+            touched.append((round(x, 2), round(y, 2)))
+        return control(self, x, y, yaw, front, now)
+    Brain.control = watch
+    try:
+        # rounds where the robot used to cut box corners / hug the arena wall
+        for kind, s in (("None", 22), ("Friend", 4), ("Friend", 5), ("Friend", 6), ("Friend", 21)):
+            scenario = "friend" if kind == "Friend" else "trap"
+            obst = eg.random_round(random.Random(30_000 + s), scenario)[0]   # same layout run_round builds
+            clear[0] = False
+            run_round(30_000 + s, kind, cfg, tuned)
+            assert not touched, (kind, s, touched[:3])
+    finally:
+        Brain.control = control
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=20)

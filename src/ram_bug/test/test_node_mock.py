@@ -100,7 +100,7 @@ class Node:
 
     def get_logger(self):
         class L:
-            def info(self, m):
+            def info(self, m, **kw):
                 print("[info]", m)
             warn = error = info
         return L()
@@ -195,6 +195,28 @@ def main():
     print(f"auto_start pose ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f} deg)  err {err:.3f} m  goal {node.brain.goal}")
     assert err < 0.08 and node.brain.goal is not None
     print("AUTO OK")
+
+    # ---- /cmd_vel subscriber discovered late (DDS over Wi-Fi): the first command must not be a reverse
+    RamBugNode.PARAMS = dict(RamBugNode.PARAMS, auto_start=False)
+    node = RamBugNode()
+    found = node.get_subscriptions_info_by_topic
+    node.get_subscriptions_info_by_topic = lambda t: found(t) if node.get_clock().t >= 3.0 else []
+    node.brain.cfg.update(start_x=1.5, start_y=0.3, start_yaw=math.pi / 2)
+    node.start_goal(1.5, 2.6)
+    for k in range(80):
+        node.get_clock().t = 0.05 * k
+        node.subs["odom"](Odometry())                  # no command has reached the robot: it stays put
+        if k % 4 == 0:
+            x, y, yaw = node.pose()
+            node.subs["scan"](LaserScan(ranges=[raycast(x, y, yaw + math.radians(i), set(), 9, 9) for i in range(360)],
+                                        angle_min=0.0, angle_increment=math.radians(1.0), range_min=0.12, range_max=3.5))
+        if k % 10 == 0:
+            node.on_plan()
+        node.on_control()
+    first = node.pubs["cmd_vel"].msgs[0].twist.linear.x
+    print(f"first /cmd_vel after late discovery: v = {first:.2f}")
+    assert first >= 0.0, "robot backs up at the start"
+    print("LATE START OK")
 
 
 if __name__ == "__main__":

@@ -11,8 +11,9 @@ ram_bug:
     lookahead_cells: 3       # aim this many 0.1 m cells ahead on the path
     min_aim: 0.25            # never aim closer than this (m): avoids stop-and-go on short paths
     smooth_deg: 15.0         # only average the target over changes smaller than this (deg)
-    stop_dist: 0.13          # stop driving forward if something is closer in front
+    stop_dist: 0.17          # m from the LDS; the Burger's front edge is 0.07 m ahead of it (~10 cm gap)
     stuck_time: 2.0          # no progress for this long -> back up and turn
+    blocked_time: 0.5        # held by stop_dist this long -> back up and turn toward the target side
     # map / perception
     inflate_cells: 1         # grow obstacles by 0.1 m for the robot body
     robot_max_cells: 4       # a LiDAR blob this small (cells) can be the other robot

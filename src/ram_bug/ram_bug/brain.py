@@ -20,6 +20,7 @@ import math
 from . import eg_core as eg
 
 CELL = eg.CELL
+ARENA = eg.W * CELL
 
 
 def wrap(a):
@@ -291,12 +292,20 @@ class Brain:
             aim = path[min(look, len(path) - 1)]
         cx, cy = eg.center(aim)
         new = (cx * CELL, cy * CELL)
-        # smooth small changes of direction (the grid planner can flip between two
-        # equally good cells every tick; a real robot would waste time turning)
+        # never aim too close: a target one cell away makes the heading error jump when we
+        # are off the cell centre, and we stop on it until the next plan (0.5 s later)
+        d_aim = math.hypot(new[0] - x, new[1] - y)
+        min_aim = self.cfg.get("min_aim", 0.25)
+        if 1e-6 < d_aim < min_aim:
+            k = min_aim / d_aim
+            new = (min(ARENA - 0.05, max(0.05, x + k * (new[0] - x))),
+                   min(ARENA - 0.05, max(0.05, y + k * (new[1] - y))))
+        # smooth only tiny changes of direction (the grid planner can flip between two
+        # equally good cells every tick). Real corners (45 deg) are taken at once.
         if self.target is not None and self.mode == self.last_mode:
             a_old = math.atan2(self.target[1] - y, self.target[0] - x)
             a_new = math.atan2(new[1] - y, new[0] - x)
-            if abs(wrap(a_new - a_old)) < math.radians(50):
+            if abs(wrap(a_new - a_old)) < math.radians(self.cfg.get("smooth_deg", 15.0)):
                 new = (0.5 * (new[0] + self.target[0]), 0.5 * (new[1] + self.target[1]))
         self.last_mode = self.mode
         self.target = new
@@ -319,13 +328,13 @@ class Brain:
                     self.stuck_ref, self.stuck_since = None, None
                     return -0.08, 1.2
         vmax = self.cfg.get("max_lin", 0.20)
-        wmax = self.cfg.get("max_ang", 1.5)
+        wmax = self.cfg.get("max_ang", 2.5)
         tx, ty = self.target
         d = math.hypot(tx - x, ty - y)
         if d < 0.02:
             return 0.0, 0.0
         err = wrap(math.atan2(ty - y, tx - x) - yaw)
-        w = max(-wmax, min(wmax, self.cfg.get("k_ang", 2.5) * err))
+        w = max(-wmax, min(wmax, self.cfg.get("k_ang", 3.0) * err))
         if abs(err) > math.radians(75):
             v = 0.0                                        # turn on the spot first
         else:

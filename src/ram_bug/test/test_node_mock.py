@@ -92,7 +92,7 @@ class Node:
         self.pubs[topic] = Pub(topic)
         return self.pubs[topic]
 
-    def create_timer(self, p, cb):
+    def create_timer(self, p, cb, callback_group=None):
         self.timers.append((p, cb))
 
     def get_clock(self):
@@ -112,7 +112,7 @@ class Node:
 def install_fakes():
     mods = {
         "rclpy": types.ModuleType("rclpy"), "rclpy.node": types.ModuleType("rclpy.node"),
-        "rclpy.qos": types.ModuleType("rclpy.qos"), "geometry_msgs": types.ModuleType("geometry_msgs"),
+        "rclpy.qos": types.ModuleType("rclpy.qos"), "rclpy.callback_groups": types.ModuleType("rclpy.callback_groups"), "geometry_msgs": types.ModuleType("geometry_msgs"),
         "geometry_msgs.msg": types.ModuleType("geometry_msgs.msg"), "nav_msgs": types.ModuleType("nav_msgs"),
         "nav_msgs.msg": types.ModuleType("nav_msgs.msg"), "sensor_msgs": types.ModuleType("sensor_msgs"),
         "sensor_msgs.msg": types.ModuleType("sensor_msgs.msg"), "std_msgs": types.ModuleType("std_msgs"),
@@ -120,6 +120,7 @@ def install_fakes():
     }
     mods["rclpy.node"].Node = Node
     mods["rclpy.qos"].qos_profile_sensor_data = 10
+    mods["rclpy.callback_groups"].MutuallyExclusiveCallbackGroup = object
     g = mods["geometry_msgs.msg"]
     g.PointStamped, g.PoseStamped, g.Twist, g.TwistStamped = PointStamped, PoseStamped, Twist, TwistStamped
     g.Pose, g.PoseArray = Pose, msgtype("PoseArray", header=Header, poses=list)

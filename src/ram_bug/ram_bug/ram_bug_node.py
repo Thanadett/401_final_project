@@ -18,6 +18,7 @@ import os
 import rclpy
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
@@ -38,6 +39,7 @@ class RamBugNode(Node):
         start_x=0.15, start_y=0.15, start_yaw=0.0,          # where the robot starts in the arena
         capture_r=0.30, time_limit=75.0,
         max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, stop_dist=0.13, stuck_time=2.0,
+        min_aim=0.25, smooth_deg=15.0,                     # m: never aim closer; deg: smooth smaller turns
         inflate_cells=1, robot_max_cells=4, robot_max_extent=3, motion_min_free=2,
         laser_x_offset=-0.032, max_free_range=3.0,
         plan_period=0.5, control_period=0.05,
@@ -99,8 +101,9 @@ class RamBugNode(Node):
         self.path_pub = self.create_publisher(Path, "ram_bug/path", 1)
         self.chaser_pub = self.create_publisher(PointStamped, "ram_bug/chaser", 1)
         self.target_pub = self.create_publisher(PointStamped, "ram_bug/target", 1)
-        self.create_timer(cfg["plan_period"], self.on_plan)
-        self.create_timer(cfg["control_period"], self.on_control)
+        # separate groups so a slow plan (pure Python, ~0.1-0.3 s on a Pi) cannot hold up /cmd_vel
+        self.create_timer(cfg["plan_period"], self.on_plan, callback_group=MutuallyExclusiveCallbackGroup())
+        self.create_timer(cfg["control_period"], self.on_control, callback_group=MutuallyExclusiveCallbackGroup())
 
         if not self.localized:
             if not math.isnan(cfg["goal_x"]) and not math.isnan(cfg["goal_y"]):
@@ -152,7 +155,15 @@ class RamBugNode(Node):
         self.odom = (p.position.x, p.position.y, yaw)
 
     def on_scan(self, msg):
-        self.scan = (list(msg.ranges), msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max)
+        ranges = list(msg.ranges)
+        key = (len(ranges), msg.angle_min, msg.angle_increment)
+        if getattr(self, "_front_key", None) != key:       # beams within +-30 deg of straight ahead
+            self._front_key = key
+            self.front_idx = [i for i in range(len(ranges))
+                              if abs(math.atan2(math.sin(msg.angle_min + i * msg.angle_increment),
+                                                math.cos(msg.angle_min + i * msg.angle_increment)))
+                              <= math.radians(30)]
+        self.scan = (ranges, msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max)
         if not self.localized:
             self.auto_localize()
             return
@@ -258,12 +269,8 @@ class RamBugNode(Node):
         if not self.active or self.odom is None or self.scan is None:
             return
         x, y, yaw = self.pose()
-        ranges, amin, ainc, rmin, rmax = self.scan
-        front = 9.9
-        for i, r in enumerate(ranges):
-            a = math.atan2(math.sin(amin + i * ainc), math.cos(amin + i * ainc))
-            if abs(a) <= math.radians(30) and rmin < r < rmax:
-                front = min(front, r)
+        ranges, _, _, rmin, rmax = self.scan
+        front = min((ranges[i] for i in self.front_idx if rmin < ranges[i] < rmax), default=9.9)
         v, w = self.brain.control(x, y, yaw, front, self.now())
         self.send(v, w)
 
@@ -307,10 +314,11 @@ class RamBugNode(Node):
 
 
 def main():
+    from rclpy.executors import MultiThreadedExecutor
     rclpy.init()
     node = RamBugNode()
     try:
-        rclpy.spin(node)
+        rclpy.spin(node, executor=MultiThreadedExecutor(num_threads=2))
     except KeyboardInterrupt:
         pass
     finally:

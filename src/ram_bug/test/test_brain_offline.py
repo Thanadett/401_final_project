@@ -154,6 +154,18 @@ def run_round(seed, chaser_kind, cfg, tuned, verbose=False, share=None):
     return "timeout", t
 
 
+def test_no_chaser_drives_briskly():
+    """Without a chaser the robot must not crawl through corners (it used to take 25-37 s here)."""
+    cfg = dict(capture_r=0.30, max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, inflate_cells=1,
+               robot_max_cells=4, robot_max_extent=3, motion_min_free=2, time_limit=75.0,
+               laser_x_offset=-0.032, max_free_range=3.0, stop_dist=0.13, plan_margin=0.0)
+    with open(os.path.join(HERE, "..", "config", "best_params.json"), encoding="utf-8") as f:
+        tuned = json.load(f)["params"]
+    for s in range(5):
+        o, t = run_round(30_000 + s, "None", cfg, tuned)
+        assert o == "reached" and t < 22.0, (s, o, t)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=20)

@@ -216,6 +216,7 @@ class Brain:
         lx, ly = x + off * math.cos(yaw), y + off * math.sin(yaw)
         max_free = min(range_max, self.cfg.get("max_free_range", 3.0))
         hits, free = set(), set()
+        floor, w, h = math.floor, eg.W, eg.H
         for i, r in enumerate(ranges):
             a = yaw + angle_min + i * angle_inc
             ca, sa = math.cos(a), math.sin(a)
@@ -229,11 +230,11 @@ class Brain:
                     hits.add(c)
             t = 0.05
             stop = min(reach, max_free) - 0.15             # keep clear of the hit cell (noise)
-            while t < stop:
-                c = self.cell_of_xy(lx + t * ca, ly + t * sa)
-                if c is None:
+            while t < stop:                                # cell_of_xy inlined: the hot loop on a Pi
+                ci, cj = floor((lx + t * ca) / CELL), floor((ly + t * sa) / CELL)
+                if not (0 <= ci < w and 0 <= cj < h):
                     break
-                free.add(c)
+                free.add(cj * w + ci)
                 t += 0.05
         free -= hits
         return hits, free

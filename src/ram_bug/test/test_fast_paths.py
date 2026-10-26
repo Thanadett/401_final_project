@@ -28,6 +28,17 @@ def test_dijkstra_scipy_matches_python():
             assert d == eg._dijkstra_py(s, blocked), s
 
 
+def test_dijkstra_cache_full():
+    """Mixing cached and new sources while the cache is full must not lose the cached ones."""
+    eg._CACHE.clear()
+    blocked = {5, 6, 7}
+    for s in range(65):                      # 65 entries: the next miss clears the cache
+        eg.dijkstra(s, blocked)
+    out = eg.dijkstra_many([64, 100, 63, 101], blocked)
+    for s, d in zip([64, 100, 63, 101], out):
+        assert d == eg._dijkstra_py(s, blocked), s
+
+
 def test_scan_numpy_matches_loop():
     if eg._np is None:
         print("numpy not installed: only the loop is used")
@@ -50,5 +61,6 @@ def test_scan_numpy_matches_loop():
 
 if __name__ == "__main__":
     test_dijkstra_scipy_matches_python()
+    test_dijkstra_cache_full()
     test_scan_numpy_matches_loop()
     print("FAST PATHS OK")

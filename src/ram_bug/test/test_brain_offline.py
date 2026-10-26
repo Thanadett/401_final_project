@@ -206,6 +206,41 @@ def test_keeps_clear_of_walls_and_boxes():
         Brain.control = control
 
 
+def test_lidar_detects_the_chaser():
+    """Without position sharing the chaser (starts in view, stands still, then drives off) must
+    be found by LiDAR. Its own old cells, mapped as wall while it stood still, used to veto
+    every motion detection: 5 of these 10 rounds never saw it."""
+    cfg = dict(capture_r=0.30, max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, inflate_cells=1,
+               robot_max_cells=4, robot_max_extent=3, motion_min_free=2, time_limit=75.0,
+               laser_x_offset=-0.032, max_free_range=3.0, stop_dist=0.17, plan_margin=0.0)
+    with open(os.path.join(HERE, "..", "config", "best_params.json"), encoding="utf-8") as f:
+        tuned = json.load(f)["params"]
+    global raycast
+    real, plan = raycast, Brain.plan
+    chaser, found = [None], [False]
+
+    def spy(x, y, a, obst, cx, cy, rmax=3.5):
+        chaser[0] = (cx, cy)
+        return real(x, y, a, obst, cx, cy, rmax)
+
+    def watch(self, *a):
+        plan(self, *a)
+        est = self.planner.ch_est if self.planner else None
+        if est is not None:
+            ex, ey = [v * CELL for v in eg.center(est)]
+            found[0] |= math.hypot(ex - chaser[0][0], ey - chaser[0][1]) <= 0.3
+    raycast, Brain.plan = spy, watch
+    try:
+        seen = 0
+        for s in range(10):
+            found[0] = False
+            run_round(30_000 + s, "Friend", cfg, tuned, share=False)
+            seen += found[0]
+    finally:
+        raycast, Brain.plan = real, plan
+    assert seen >= 9, f"chaser found by LiDAR in only {seen}/10 rounds"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=20)

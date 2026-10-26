@@ -149,12 +149,13 @@ def dijkstra_many(srcs, blocked):
     out = [_CACHE.get((s, key)) for s in srcs]
     todo = [s for s, d in zip(srcs, out) if d is None]
     if todo:
+        fresh = _dijkstra_sp(todo, key) if _np is not None else [_dijkstra_py(s, key) for s in todo]
+        got = dict(zip(todo, fresh))
+        out = [got[s] if d is None else d for s, d in zip(srcs, out)]   # not from _CACHE: it may be cleared
         if len(_CACHE) > 64:
             _CACHE.clear()
-        fresh = _dijkstra_sp(todo, key) if _np is not None else [_dijkstra_py(s, key) for s in todo]
-        for s, d in zip(todo, fresh):
+        for s, d in got.items():
             _CACHE[(s, key)] = d
-        out = [_CACHE[(s, key)] for s in srcs]
     return out
 
 

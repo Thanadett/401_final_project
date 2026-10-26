@@ -76,17 +76,49 @@ def cdist(a, b):
     return math.hypot(ax - bx, ay - by)
 
 
+def _neighbour_table():
+    """Per cell, in MOVES order: (cell, step cost, side cell a, side cell b). A diagonal step
+    is only allowed when both side cells are free (no corner cutting); straight steps use -1."""
+    table = []
+    for i in range(N):
+        x, y = i % W, i // W
+        row = []
+        for dx, dy in MOVES[1:]:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < W and 0 <= ny < H:
+                if dx and dy:
+                    row.append((ny * W + nx, SQ2, idx(x + dx, y), idx(x, y + dy)))
+                else:
+                    row.append((ny * W + nx, 1.0, -1, -1))
+        table.append(tuple(row))
+    return tuple(table)
+
+
+_NB = _neighbour_table()   # precomputed: these two run ~1e6 times per round on the robot
+
+
+def _near_table():
+    """Per cell: cells at Chebyshev distance <= 1, and 2..3 (inside the grid), same order as before."""
+    table = []
+    for i in range(N):
+        cx, cy = i % W, i // W
+        n1, n3 = [], []
+        for dx in range(-3, 4):
+            for dy in range(-3, 4):
+                x, y = cx + dx, cy + dy
+                if 0 <= x < W and 0 <= y < H:
+                    (n1 if max(abs(dx), abs(dy)) <= 1 else n3).append(y * W + x)
+        table.append((tuple(n1), tuple(n3)))
+    return tuple(table)
+
+
+_NEAR13 = _near_table()    # for RAMBug.all_rings
+
+
 def neighbours(i, blocked, stay=True):
-    x, y = xy(i)
     out = [i] if stay else []
-    for dx, dy in MOVES[1:]:
-        nx, ny = x + dx, y + dy
-        if not (0 <= nx < W and 0 <= ny < H):
-            continue
-        j = ny * W + nx
-        if j in blocked:
-            continue
-        if dx and dy and (idx(x + dx, y) in blocked or idx(x, y + dy) in blocked):
+    for j, _, a, b in _NB[i]:
+        if j in blocked or a in blocked or b in blocked:
             continue
         out.append(j)
     return out
@@ -97,16 +129,18 @@ def dijkstra(src, blocked):
     d = [INF] * N
     d[src] = 0.0
     pq = [(0.0, src)]
+    pop, push, nb = heapq.heappop, heapq.heappush, _NB
     while pq:
-        du, u = heapq.heappop(pq)
+        du, u = pop(pq)
         if du > d[u]:
             continue
-        ux = u % W
-        for v in neighbours(u, blocked, stay=False):
-            nd = du + (1.0 if (v % W == ux or v // W == u // W) else SQ2)
+        for v, c, a, b in nb[u]:
+            if v in blocked or a in blocked or b in blocked:
+                continue
+            nd = du + c
             if nd < d[v]:
                 d[v] = nd
-                heapq.heappush(pq, (nd, v))
+                push(pq, (nd, v))
     return d
 
 
@@ -643,12 +677,9 @@ class RAMBug(Evader):
                 continue                                 # stuck to the wall: cannot circle it
             near1, near3 = set(), set()
             for c in g:
-                cx, cy = xy(c)
-                for dx in range(-3, 4):
-                    for dy in range(-3, 4):
-                        x, y = cx + dx, cy + dy
-                        if 0 <= x < W and 0 <= y < H:
-                            (near1 if max(abs(dx), abs(dy)) <= 1 else near3).add(idx(x, y))
+                n1, n3 = _NEAR13[c]
+                near1.update(n1)
+                near3.update(n3)
             ring = [r for r in near3 - near1 if r not in self.known and d_me[r] < INF]
             if len(ring) >= 12:
                 out.append(ring)
@@ -701,6 +732,7 @@ class RAMBug(Evader):
         d_ch = self.d_ch
         slack = self.rc + self.ch_age + 1.0
         A, B = self.p["w_terr_goal"], self.p["w_terr_size"]
+        lim = [dc - slack for dc in d_ch]
         best, bv = me, -INF
         for m, p, near in self.safe_moves(rnd, me):
             if near <= self.rc:
@@ -709,12 +741,8 @@ class RAMBug(Evader):
                 v = 1e5
             else:
                 dm = dijkstra(m, self.known)
-                size, gbest = 0, INF
-                for x in range(N):
-                    if dm[x] < d_ch[x] - slack:
-                        size += 1
-                        if self.d_goal[x] < gbest:
-                            gbest = self.d_goal[x]
+                mine = [g for a, l, g in zip(dm, lim, self.d_goal) if a < l]    # cells we reach first
+                size, gbest = len(mine), min(mine, default=INF)
                 if size == 0:
                     gbest = self.d_goal[m] + 20
                 mob = len(neighbours(m, self.known, stay=False)) / 8.0     # avoid walls / corners

@@ -14,6 +14,7 @@ auto_start:=true: the robot stands still for ~1 s and finds the arena walls itse
 import json
 import math
 import os
+import time
 
 import rclpy
 from geometry_msgs.msg import PointStamped, PoseStamped, Twist, TwistStamped
@@ -38,7 +39,8 @@ class RamBugNode(Node):
         goal_x=float("nan"), goal_y=float("nan"),          # arena metres (nan = wait for /goal_pose)
         start_x=0.15, start_y=0.15, start_yaw=0.0,          # where the robot starts in the arena
         capture_r=0.30, time_limit=75.0,
-        max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, stop_dist=0.13, stuck_time=2.0,
+        max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, stop_dist=0.17, stuck_time=2.0,
+        blocked_time=0.5,                                  # s held by stop_dist -> back up and turn
         min_aim=0.25, smooth_deg=15.0,                     # m: never aim closer; deg: smooth smaller turns
         inflate_cells=1, robot_max_cells=4, robot_max_extent=3, motion_min_free=2,
         laser_x_offset=-0.032, max_free_range=3.0,
@@ -257,7 +259,11 @@ class RamBugNode(Node):
             return
         x, y, yaw = self.pose()
         prev_done = self.brain.done
+        t0 = time.perf_counter()
         self.brain.plan(x, y, yaw, self.scan, self.now(), getattr(self, "scan_pose", None))
+        dt = time.perf_counter() - t0
+        if dt > 0.5 * self.cfg["plan_period"]:              # the robot drives on an old target meanwhile
+            self.get_logger().warn(f"slow plan: {1000 * dt:.0f} ms in {self.brain.mode}", throttle_duration_sec=1.0)
         if self.brain.done and not prev_done:
             res = {"reached": "WIN - reached the goal", "timeout": "DRAW - time is up"}[self.brain.done]
             self.get_logger().info(res)
@@ -268,6 +274,8 @@ class RamBugNode(Node):
     def on_control(self):
         if not self.active or self.odom is None or self.scan is None:
             return
+        if not self.ensure_cmd_pub():
+            return                                          # nobody listens yet: do not run the stuck timer
         x, y, yaw = self.pose()
         ranges, _, _, rmin, rmax = self.scan
         front = min((ranges[i] for i in self.front_idx if rmin < ranges[i] < rmax), default=9.9)

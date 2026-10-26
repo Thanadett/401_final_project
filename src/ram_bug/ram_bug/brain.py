@@ -21,6 +21,10 @@ from . import eg_core as eg
 
 CELL = eg.CELL
 ARENA = eg.W * CELL
+# LiDAR hits on the arena walls land just outside the grid, so the walls never enter the map.
+# The outer ring of cells (centres 0.05 m from the wall) is closer than the Burger's half width.
+BORDER = frozenset(eg.idx(i, j) for i in range(eg.W) for j in range(eg.H)
+                   if i in (0, eg.W - 1) or j in (0, eg.H - 1))
 
 
 def wrap(a):
@@ -93,6 +97,7 @@ class RosRAMBug(eg.RAMBug):
                     nx, ny = x + dx, y + dy
                     if 0 <= nx < eg.W and 0 <= ny < eg.H:
                         out.add(eg.idx(nx, ny))
+        out |= BORDER
         # never block our own cell; if we are boxed in by the inflation (after drift),
         # also free the cells around us so the robot can drive out
         out.discard(me)
@@ -159,6 +164,10 @@ class Brain:
         self.stuck_ref = None
         self.stuck_since = None
         self.recover_until = None
+        self.recover_w = 1.2
+        self.blocked = False
+        self.start_xy = None        # where the robot was when it got the goal
+        self.has_moved = False
 
     # ------------------------------------------------------------ frames
     def odom_to_arena(self, ox, oy, oyaw):
@@ -199,6 +208,7 @@ class Brain:
         self.done = None
         self.t_start = None
         self.mode = "START"
+        self.start_xy, self.has_moved = None, False
 
     # ------------------------------------------------------------ LiDAR -> cells
     def scan_to_cells(self, x, y, yaw, ranges, angle_min, angle_inc, range_min, range_max):
@@ -227,6 +237,16 @@ class Brain:
                 t += 0.05
         free -= hits
         return hits, free
+
+    def clear_line(self, x, y, cx, cy, blocked, me):
+        """True if the segment from (x, y) m to (cx, cy) cells crosses no blocked cell."""
+        tx, ty = cx * CELL, cy * CELL
+        n = max(1, int(math.hypot(tx - x, ty - y) / 0.02))
+        for i in range(1, n + 1):
+            c = self.cell_of_xy(x + (tx - x) * i / n, y + (ty - y) * i / n)
+            if c is None or (c in blocked and c != me):
+                return False
+        return True
 
     # ------------------------------------------------------------ 2 Hz decision
     def plan(self, x, y, yaw, scan, now, scan_pose=None):
@@ -264,8 +284,10 @@ class Brain:
         nxt = self.planner.act(view)
         self.mode = self.planner.mode
         path = self.planner.race_path or []
-        if self.mode == "RACE" and (len(path) < 2 or math.hypot(x - self.goal[0], y - self.goal[1]) < 0.35):
-            self.target = self.goal                        # last few cm: drive straight onto the goal
+        near_goal = math.hypot(x - self.goal[0], y - self.goal[1]) < 0.35
+        if self.mode == "RACE" and (len(path) < 2 or near_goal) or self.mode == "NAV" and near_goal:
+            # last few cm: drive straight onto the goal (it may lie in the blocked wall ring)
+            self.target = self.goal
             self.last_mode = self.mode
             return
         if nxt == me and self.mode != "WAIT" and self.planner.d_goal[me] >= eg.INF:
@@ -286,10 +308,16 @@ class Brain:
             self.target = None
             return
         # aim a little ahead along the planned path for smoother driving
+        # but only as far as the straight line stays clear of the inflated map: the robot
+        # drives that line, and cutting a box corner scrapes the box with the wheels
         aim = nxt
         look = self.cfg.get("lookahead_cells", 3)
+        blocked = self.planner.known
         if len(path) >= 3 and path[0] == me:
-            aim = path[min(look, len(path) - 1)]
+            for k in range(min(look, len(path) - 1), 0, -1):
+                if self.clear_line(x, y, *eg.center(path[k]), blocked, me):
+                    aim = path[k]
+                    break
         cx, cy = eg.center(aim)
         new = (cx * CELL, cy * CELL)
         # never aim too close: a target one cell away makes the heading error jump when we
@@ -298,8 +326,10 @@ class Brain:
         min_aim = self.cfg.get("min_aim", 0.25)
         if 1e-6 < d_aim < min_aim:
             k = min_aim / d_aim
-            new = (min(ARENA - 0.05, max(0.05, x + k * (new[0] - x))),
+            far = (min(ARENA - 0.05, max(0.05, x + k * (new[0] - x))),
                    min(ARENA - 0.05, max(0.05, y + k * (new[1] - y))))
+            if self.clear_line(x, y, far[0] / CELL, far[1] / CELL, blocked, me):
+                new = far
         # smooth only tiny changes of direction (the grid planner can flip between two
         # equally good cells every tick). Real corners (45 deg) are taken at once.
         if self.target is not None and self.mode == self.last_mode:
@@ -316,30 +346,41 @@ class Brain:
         if self.target is None:
             self.stuck_ref, self.stuck_since = None, None
             return 0.0, 0.0
-        # stuck recovery: we keep asking to drive but do not move -> back up and turn
+        tx, ty = self.target
+        err = wrap(math.atan2(ty - y, tx - x) - yaw)
+        # stuck recovery: we keep asking to drive but do not move -> back up and turn.
+        # "asking to drive" includes being held by the front safety stop: otherwise a target
+        # straight behind a box corner leaves v = 0 and w = 0 for ever
+        # The no-progress timer only runs once the robot has moved at all: before that the first
+        # commands may simply not have reached it yet (DDS discovery, bringup still starting)
+        if self.start_xy is None:
+            self.start_xy = (x, y)
+        if not self.has_moved and math.hypot(x - self.start_xy[0], y - self.start_xy[1]) > 0.03:
+            self.has_moved = True
         if now is not None:
             if self.recover_until and now < self.recover_until:
-                return -0.08, 1.2
-            if self.last_v > 0.05:
+                return -0.08, self.recover_w
+            if self.last_v > 0.05 and (self.has_moved or self.blocked):
+                limit = self.cfg.get("blocked_time", 0.5) if self.blocked else self.cfg.get("stuck_time", 2.0)
                 if self.stuck_ref is None or math.hypot(x - self.stuck_ref[0], y - self.stuck_ref[1]) > 0.03:
                     self.stuck_ref, self.stuck_since = (x, y), now
-                elif self.stuck_since is not None and now - self.stuck_since > self.cfg.get("stuck_time", 2.0):
+                elif self.stuck_since is not None and now - self.stuck_since > limit:
                     self.recover_until = now + 0.6
+                    self.recover_w = 1.2 if err >= 0 else -1.2     # turn toward the target side
                     self.stuck_ref, self.stuck_since = None, None
-                    return -0.08, 1.2
+                    return -0.08, self.recover_w
         vmax = self.cfg.get("max_lin", 0.20)
         wmax = self.cfg.get("max_ang", 2.5)
-        tx, ty = self.target
         d = math.hypot(tx - x, ty - y)
         if d < 0.02:
             return 0.0, 0.0
-        err = wrap(math.atan2(ty - y, tx - x) - yaw)
         w = max(-wmax, min(wmax, self.cfg.get("k_ang", 3.0) * err))
         if abs(err) > math.radians(75):
             v = 0.0                                        # turn on the spot first
         else:
             v = vmax * max(0.0, math.cos(err))
-        if front_min < self.cfg.get("stop_dist", 0.13):
-            v = 0.0                                        # safety: something right in front
         self.last_v = v
+        self.blocked = front_min < self.cfg.get("stop_dist", 0.17)
+        if self.blocked:
+            v = 0.0                                        # safety: something right in front
         return v, w

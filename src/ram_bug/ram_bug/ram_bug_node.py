@@ -268,7 +268,17 @@ class RamBugNode(Node):
             res = {"reached": "WIN - reached the goal", "timeout": "DRAW - time is up"}[self.brain.done]
             self.get_logger().info(res)
         src = "shared" if self.brain.peer_used else "lidar"
-        self.mode_pub.publish(String(data=f"{self.brain.mode} (chaser from {src})"))
+        mode = f"{self.brain.mode} (chaser from {src})"
+        self.mode_pub.publish(String(data=mode))
+        if mode != getattr(self, "_last_mode", None):       # print every state change to the console
+            self._last_mode = mode
+            t = 0.0 if self.brain.t_start is None else self.now() - self.brain.t_start
+            pl = self.brain.planner
+            ch = ""
+            if pl is not None and pl.ch_est is not None:
+                cx, cy = eg.center(pl.ch_est)
+                ch = f", chaser ({cx * eg.CELL:.2f}, {cy * eg.CELL:.2f}) {math.hypot(cx * eg.CELL - x, cy * eg.CELL - y):.2f} m away"
+            self.get_logger().info(f"[{t:5.1f} s] {mode} at ({x:.2f}, {y:.2f}){ch}")
         self.publish_debug(x, y)
 
     def on_control(self):

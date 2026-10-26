@@ -31,7 +31,17 @@ Chasers know the true map. With chaser_sight="los" they only see us in line of s
 """
 import heapq
 import math
+import os
 import random
+
+try:                       # optional: C Dijkstra, many sources per call (sudo apt install python3-scipy)
+    if os.environ.get("RAM_BUG_PURE_PYTHON"):
+        raise ImportError
+    import numpy as _np
+    from scipy.sparse import csr_matrix as _csr
+    from scipy.sparse.csgraph import dijkstra as _sp_dijkstra
+except ImportError:
+    _np = None
 
 W = H = 30
 N = W * H
@@ -125,7 +135,47 @@ def neighbours(i, blocked, stay=True):
 
 
 def dijkstra(src, blocked):
-    """Travel time (ticks) from src to every cell; diagonal steps cost sqrt(2)."""
+    """Travel time (ticks) from src to every cell; diagonal steps cost sqrt(2).
+    The result is shared with a small cache: callers must not modify it."""
+    return dijkstra_many((src,), blocked)[0]
+
+
+_CACHE = {}                # (src, frozenset(blocked)) -> distances; the map often does not change
+
+
+def dijkstra_many(srcs, blocked):
+    """dijkstra() for several sources at once (one C call with scipy)."""
+    key = frozenset(blocked)
+    out = [_CACHE.get((s, key)) for s in srcs]
+    todo = [s for s, d in zip(srcs, out) if d is None]
+    if todo:
+        if len(_CACHE) > 64:
+            _CACHE.clear()
+        fresh = _dijkstra_sp(todo, key) if _np is not None else [_dijkstra_py(s, key) for s in todo]
+        for s, d in zip(todo, fresh):
+            _CACHE[(s, key)] = d
+        out = [_CACHE[(s, key)] for s in srcs]
+    return out
+
+
+if _np is not None:
+    # every grid step once: (u, v, cost, side a, side b); a straight step has no side cells (index N, never blocked)
+    _EDGES = [(u, v, c, a if a >= 0 else N, b if b >= 0 else N) for u in range(N) for v, c, a, b in _NB[u]]
+    _EU, _EV, _EC, _EA, _EB = (_np.array(col) for col in zip(*_EDGES))
+
+
+def _dijkstra_sp(srcs, blocked):
+    mask = _np.zeros(N + 1, dtype=bool)
+    if blocked:
+        mask[_np.fromiter(blocked, dtype=_np.int64, count=len(blocked))] = True
+    ok = ~(mask[_EV] | mask[_EA] | mask[_EB])         # same rule as neighbours(): v and both sides free
+    g = _csr((_EC[ok], (_EU[ok], _EV[ok])), shape=(N, N))
+    d = _sp_dijkstra(g, directed=True, indices=list(srcs))
+    d[_np.isinf(d)] = INF
+    return d.tolist()
+
+
+def _dijkstra_py(src, blocked):
     d = [INF] * N
     d[src] = 0.0
     pq = [(0.0, src)]
@@ -733,14 +783,17 @@ class RAMBug(Evader):
         slack = self.rc + self.ch_age + 1.0
         A, B = self.p["w_terr_goal"], self.p["w_terr_size"]
         lim = [dc - slack for dc in d_ch]
+        moves = self.safe_moves(rnd, me)
+        far = [m for m, p, near in moves if near > self.rc and dist(p, center(self.goal)) > GOAL_R]
+        dms = dict(zip(far, dijkstra_many(far, self.known)))      # one call for all candidate moves
         best, bv = me, -INF
-        for m, p, near in self.safe_moves(rnd, me):
+        for m, p, near in moves:
             if near <= self.rc:
                 v = -1e5 + near
             elif dist(p, center(self.goal)) <= GOAL_R:
                 v = 1e5
             else:
-                dm = dijkstra(m, self.known)
+                dm = dms[m]
                 mine = [g for a, l, g in zip(dm, lim, self.d_goal) if a < l]    # cells we reach first
                 size, gbest = len(mine), min(mine, default=INF)
                 if size == 0:

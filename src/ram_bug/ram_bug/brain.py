@@ -23,6 +23,11 @@ CELL = eg.CELL
 ARENA = eg.W * CELL
 # LiDAR hits on the arena walls land just outside the grid, so the walls never enter the map.
 # The outer ring of cells (centres 0.05 m from the wall) is closer than the Burger's half width.
+# the ray-marching steps t = 0.05, 0.10, ... built by the same repeated addition as the loop
+_STEPS = [0.05]
+while _STEPS[-1] < 4.0:
+    _STEPS.append(_STEPS[-1] + 0.05)
+_STEPS = eg._np.array(_STEPS) if eg._np is not None else None
 BORDER = frozenset(eg.idx(i, j) for i in range(eg.W) for j in range(eg.H)
                    if i in (0, eg.W - 1) or j in (0, eg.H - 1))
 
@@ -217,6 +222,7 @@ class Brain:
         max_free = min(range_max, self.cfg.get("max_free_range", 3.0))
         hits, free = set(), set()
         floor, w, h = math.floor, eg.W, eg.H
+        rays = []                                          # (cos, sin, stop) of every ray that frees cells
         for i, r in enumerate(ranges):
             a = yaw + angle_min + i * angle_inc
             ca, sa = math.cos(a), math.sin(a)
@@ -228,16 +234,33 @@ class Brain:
                 c = self.cell_of_xy(lx + r * ca, ly + r * sa)
                 if c is not None:
                     hits.add(c)
-            t = 0.05
-            stop = min(reach, max_free) - 0.15             # keep clear of the hit cell (noise)
-            while t < stop:                                # cell_of_xy inlined: the hot loop on a Pi
-                ci, cj = floor((lx + t * ca) / CELL), floor((ly + t * sa) / CELL)
-                if not (0 <= ci < w and 0 <= cj < h):
-                    break
-                free.add(cj * w + ci)
-                t += 0.05
+            rays.append((ca, sa, min(reach, max_free) - 0.15))   # keep clear of the hit cell (noise)
+        if eg._np is not None and rays:
+            free = self._free_cells_np(lx, ly, rays)
+        else:
+            for ca, sa, stop in rays:
+                t = 0.05
+                while t < stop:                            # cell_of_xy inlined: the hot loop on a Pi
+                    ci, cj = floor((lx + t * ca) / CELL), floor((ly + t * sa) / CELL)
+                    if not (0 <= ci < w and 0 <= cj < h):
+                        break
+                    free.add(cj * w + ci)
+                    t += 0.05
         free -= hits
         return hits, free
+
+    @staticmethod
+    def _free_cells_np(lx, ly, rays):
+        """Same cells as the loop above, every ray at once: a ray frees the cells at 0.05 m steps
+        up to its stop, but nothing after it first leaves the grid."""
+        np = eg._np
+        ca, sa, stop = (np.array(col) for col in zip(*rays))
+        t = _STEPS[None, :]
+        ci = np.floor((lx + t * ca[:, None]) / CELL)
+        cj = np.floor((ly + t * sa[:, None]) / CELL)
+        inside = np.logical_and.accumulate((ci >= 0) & (ci < eg.W) & (cj >= 0) & (cj < eg.H), axis=1)
+        take = inside & (t < stop[:, None])
+        return set((cj[take] * eg.W + ci[take]).astype(np.int64).tolist())
 
     def clear_line(self, x, y, cx, cy, blocked, me):
         """True if the segment from (x, y) m to (cx, cy) cells crosses no blocked cell."""

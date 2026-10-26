@@ -80,6 +80,10 @@ class RamBugNode(Node):
                 tuned = json.load(f)["params"]
             self.get_logger().info(f"loaded tuned parameters from {pf}")
         self.brain = Brain(cfg, tuned)
+        if eg._np is not None:
+            self.get_logger().info("planner: numpy + scipy fast path")
+        else:
+            self.get_logger().warn("planner: pure Python (sudo apt install python3-scipy for ~2x faster planning)")
         self.localized = not cfg["auto_start"]
         self.auto_buf = []
         self.pending_goal = None

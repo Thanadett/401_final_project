@@ -3,10 +3,18 @@
 แพ็กเกจ ROS 2 ที่นำอัลกอริทึม RAM-Bug จากเกมจำลองมาใช้กับหุ่นจริง
 หุ่นของเราเป็น **ฝ่ายหนี**: รับจุด Goal แล้ววิ่งไปให้ถึง โดยหลบหุ่นคนไล่ ใช้ **LiDAR + odometry อย่างเดียว**
 
+**ตัววางแผนเริ่มต้นคือ Bug2** (`algorithm: bug2`) เปลี่ยนกลับเป็น RAM-Bug ได้ด้วย `algorithm:=ram_bug`
+- `MLINE` วิ่งตามเส้นตรง (M-line) จากจุดเริ่มไป Goal
+- `WALL` เจอสิ่งกีดขวางบนเส้น → จำจุดชน แล้วเดินเลียบขอบกล่อง จนกลับมาเจอ M-line ที่ใกล้ Goal กว่าจุดชน
+  (เลือกเลี้ยวด้านที่สั้นกว่าตามแผนที่ที่เห็นตอนนั้น, วนครบรอบทั้งสองด้านแล้วยังไม่ถึง → `NAV` ทางสั้นสุด)
+- `AVOID` LiDAR เห็น **วัตถุที่เคลื่อนที่** (เซลล์ที่เคยว่างแล้วมีของมาอยู่) ใกล้กว่า `avoid_r` (1.2 m)
+  → เลือกก้าวที่ห่างจากมันมากที่สุด (เผื่อมันขยับมาทางเราแล้ว) แต่ยังดึงเข้าหา Goal
+  พอมันไกลเกิน `avoid_exit` (1.4 m) ก็กลับไป Bug2 โดยลากเส้น M-line ใหม่จากจุดที่อยู่
+
 ```
 ram_bug_ws/src/ram_bug/
 ├── ram_bug/
-│   ├── eg_core.py           อัลกอริทึม RAM-Bug (ชุดเดียวกับเกมจำลอง)
+│   ├── eg_core.py           อัลกอริทึม Bug2 และ RAM-Bug (ชุดเดียวกับเกมจำลอง)
 │   ├── brain.py             แปลง LaserScan → แผนที่ตาราง, ตัดสินใจ, คุมล้อ (ไม่มี ROS)
 │   ├── ram_bug_node.py      ROS node: /scan /odom /goal_pose → /cmd_vel
 │   └── trap_chaser_node.py  คนไล่ทดสอบใน Gazebo (ใช้เฉพาะตอนจำลอง)
@@ -44,6 +52,7 @@ ros2 launch ram_bug sim.launch.py chaser_mode:=trap       # คนไล่แ�
 ros2 launch ram_bug sim.launch.py world:=arena_3          # สนามอื่น
 ros2 launch ram_bug sim.launch.py chaser_mode:=pursuit    # คนไล่วิ่งเข้าหาตั้งแต่ต้น
 ros2 launch ram_bug sim.launch.py goal_x:=nan             # รอให้กด 2D Goal Pose ใน RViz
+ros2 launch ram_bug sim.launch.py algorithm:=ram_bug      # ใช้ RAM-Bug แทน Bug2
 ```
 
 - คนไล่เป็นทรงกระบอกสีแดง โหมด `friend` (ค่าเริ่มต้น) เลียนแบบโค้ดทีมเพื่อน: ไกลกว่า 0.8 m ดักหน้า (ตำแหน่ง + ความเร็ว × เวลา),
@@ -96,6 +105,8 @@ ros2 launch ram_bug robot.launch.py share:=false cmd_vel_stamped:=true rviz:=tru
 
 | ค่า | เริ่มต้น | ปรับเมื่อ |
 |---|---|---|
+| `algorithm` | bug2 | `ram_bug` = ตัววางแผนเดิม (หนีเก่งกว่า แต่ไม่ใช่ Bug2) |
+| `avoid_r` / `avoid_exit` | 1.2 / 1.4 m | (Bug2) หลบช้าไป → เพิ่ม, หลบทั้งที่ยังไกล/ไม่ถึง Goal → ลด |
 | `capture_r` | 0.30 | กติการะยะจับเปลี่ยน |
 | `max_lin` / `max_ang` | 0.20 / 2.5 | หุ่นส่ายหรือเลี้ยวไม่ทัน |
 | `inflate_cells` | 1 (0.1 m) | หุ่นเฉี่ยวกล่อง → 2, ผ่านช่องแคบไม่ได้ → 0 |
@@ -108,11 +119,25 @@ ros2 launch ram_bug robot.launch.py share:=false cmd_vel_stamped:=true rviz:=tru
 python3 src/ram_bug/test/test_brain_offline.py     # หุ่นแบบล้อจริง + LiDAR จำลอง 360 ลำ
 python3 src/ram_bug/test/test_brain_offline.py --chaser Friend             # คนไล่แบบทีมเพื่อน + แชร์ตำแหน่ง
 python3 src/ram_bug/test/test_brain_offline.py --chaser Friend --no-share  # เทียบกับ LiDAR อย่างเดียว
+python3 src/ram_bug/test/test_brain_offline.py --algo ram_bug              # ตัววางแผน RAM-Bug
 python3 src/ram_bug/test/test_node_mock.py         # เช็คว่า node รับ/ส่งข้อความถูก
 python3 src/ram_bug/test/test_peer_link.py         # เช็ค UDP รับ/ส่ง และรูปแบบข้อความ
 ```
 
-ผลทดสอบ offline:
+ผลทดสอบ offline ของ Bug2 (LiDAR อย่างเดียว, 20 รอบ):
+
+| คนไล่ | Bug2 + หลบวัตถุเคลื่อนที่ | Bug2 ไม่หลบ | RAM-Bug |
+|---|---|---|---|
+| ไม่มีคนไล่ (10 รอบ) | ถึง Goal 10/10 (15-26 s) | - | 10/10 (14-21 s) |
+| ทีมเพื่อน (intercept/chase) | **6/20** | 1/20 | 6/20 |
+| วิ่งตรงเข้าหา | **8/20** | 4/20 | 6/15 |
+| กับดัก (15 รอบ) | 14/15 | - | 13/15 |
+
+- การหลบวัตถุเคลื่อนที่ช่วยได้ชัด (ถึง Goal มากขึ้น 2-6 เท่าเทียบกับ Bug2 เฉย ๆ)
+- Bug2 ใช้เวลามากกว่าเล็กน้อยเมื่อไม่มีคนไล่ เพราะเดินเลียบขอบกล่อง และบางครั้งเลือกอ้อมด้านที่ยาว
+  (ด้านหลังกล่องยังไม่อยู่ในแผนที่ตอนเลือก)
+
+ผลทดสอบ offline ของ RAM-Bug (ของเดิม):
 
 | คนไล่ | แชร์ตำแหน่ง UDP | LiDAR อย่างเดียว |
 |---|---|---|

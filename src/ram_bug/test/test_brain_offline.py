@@ -8,6 +8,7 @@ odom -> arena frame, and the heading controller.
 
   python3 test/test_brain_offline.py            # 20 rounds vs Trap and vs Pursuit
   python3 test/test_brain_offline.py --rounds 5 --chaser Trap
+  python3 test/test_brain_offline.py --algo ram_bug   # the earlier RAM-Bug planner
 """
 import argparse
 import json
@@ -155,15 +156,31 @@ def run_round(seed, chaser_kind, cfg, tuned, verbose=False, share=None):
 
 
 def test_no_chaser_drives_briskly():
-    """Without a chaser the robot must not crawl through corners (it used to take 25-37 s here)."""
+    """Without a chaser the robot must not crawl through corners (it used to take 25-37 s here).
+    RAM-Bug drives the shortest path; Bug2 follows box edges, which is longer."""
     cfg = dict(capture_r=0.30, max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, inflate_cells=1,
                robot_max_cells=4, robot_max_extent=3, motion_min_free=2, time_limit=75.0,
                laser_x_offset=-0.032, max_free_range=3.0, stop_dist=0.13, plan_margin=0.0)
     with open(os.path.join(HERE, "..", "config", "best_params.json"), encoding="utf-8") as f:
         tuned = json.load(f)["params"]
-    for s in range(5):
-        o, t = run_round(30_000 + s, "None", cfg, tuned)
-        assert o == "reached" and t < 22.0, (s, o, t)
+    for algo, limit, rounds in (("ram_bug", 22.0, 5), ("bug2", 30.0, 10)):
+        for s in range(rounds):
+            o, t = run_round(30_000 + s, "None", dict(cfg, algorithm=algo), tuned)
+            assert o == "reached" and t < limit, (algo, s, o, t)
+
+
+def test_bug2_avoids_moving_chaser():
+    """Bug2 with LiDAR only: stepping away from the moving object must get us to the goal more
+    often than plain Bug2 that ignores it (measured 6/20 vs 1/20 against the friend's chaser)."""
+    cfg = dict(capture_r=0.30, max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, inflate_cells=1,
+               robot_max_cells=4, robot_max_extent=3, motion_min_free=2, time_limit=75.0,
+               laser_x_offset=-0.032, max_free_range=3.0, stop_dist=0.13, plan_margin=0.0, algorithm="bug2")
+    reached = {}
+    for avoid in (0.0, 1.2):
+        c = dict(cfg, avoid_r=avoid, avoid_exit=avoid + 0.2 if avoid else 0.0)
+        reached[avoid] = sum(run_round(30_000 + s, "Friend", c, None, share=False)[0] == "reached"
+                             for s in range(20))
+    assert reached[1.2] >= 4 and reached[1.2] > reached[0.0] + 2, reached
 
 
 def body_touches(x, y, yaw, obst, r=0.09):
@@ -196,12 +213,13 @@ def test_keeps_clear_of_walls_and_boxes():
     Brain.control = watch
     try:
         # rounds where the robot used to cut box corners / hug the arena wall
-        for kind, s in (("None", 22), ("Friend", 4), ("Friend", 5), ("Friend", 6), ("Friend", 21)):
-            scenario = "friend" if kind == "Friend" else "trap"
-            obst = eg.random_round(random.Random(30_000 + s), scenario)[0]   # same layout run_round builds
-            clear[0] = False
-            run_round(30_000 + s, kind, cfg, tuned)
-            assert not touched, (kind, s, touched[:3])
+        for algo in ("ram_bug", "bug2"):
+            for kind, s in (("None", 22), ("Friend", 4), ("Friend", 5), ("Friend", 6), ("Friend", 21)):
+                scenario = "friend" if kind == "Friend" else "trap"
+                obst = eg.random_round(random.Random(30_000 + s), scenario)[0]   # same layout run_round builds
+                clear[0] = False
+                run_round(30_000 + s, kind, dict(cfg, algorithm=algo), tuned)
+                assert not touched, (algo, kind, s, touched[:3])
     finally:
         Brain.control = control
 
@@ -247,10 +265,12 @@ def main():
     ap.add_argument("--chaser", default="both", choices=["both", "Friend", "Trap", "Pursuit", "None"])
     ap.add_argument("--no-share", action="store_true", help="Friend without position sharing (LiDAR only)")
     ap.add_argument("--margin", type=float, default=None, help="override plan_margin (m)")
+    ap.add_argument("--algo", default="bug2", choices=["bug2", "ram_bug"], help="planner")
     a = ap.parse_args()
     cfg = dict(capture_r=0.30, max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, inflate_cells=1,
                robot_max_cells=4, robot_max_extent=3, motion_min_free=2, time_limit=75.0,
                laser_x_offset=-0.032, max_free_range=3.0, stop_dist=0.13, plan_margin=0.0)
+    cfg["algorithm"] = a.algo
     if a.margin is not None:
         cfg["plan_margin"] = a.margin
     with open(os.path.join(HERE, "..", "config", "best_params.json"), encoding="utf-8") as f:

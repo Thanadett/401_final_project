@@ -42,7 +42,8 @@ def setup(context):
                           "goal_x": float(lc["goal_x"]), "goal_y": float(lc["goal_y"]),
                           "capture_r": float(lc["capture_r"]),
                           "cmd_vel_stamped": lc["cmd_vel_stamped"],
-                          "detect_chaser": lc["detect_chaser"], "auto_start": auto}]),
+                          "detect_chaser": lc["detect_chaser"], "auto_start": auto,
+                          "algorithm": lc["algorithm"]}]),
     ]
     if lc["share"] == "true" and auto:
         from launch.actions import LogInfo
@@ -74,6 +75,7 @@ def generate_launch_description():
         DeclareLaunchArgument("cmd_vel_stamped", default_value="auto"),
         DeclareLaunchArgument("rviz", default_value="false"),
         DeclareLaunchArgument("detect_chaser", default_value="lidar", description="lidar or off"),
+        DeclareLaunchArgument("algorithm", default_value="bug2", description="bug2 or ram_bug"),
         # ---- position sharing with the other team (see PROTOCOL_TH.md) ----
         DeclareLaunchArgument("share", default_value="true"),
         DeclareLaunchArgument("peer_host", default_value="", description="IP of the chaser's Raspberry Pi"),

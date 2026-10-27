@@ -12,7 +12,8 @@ Frames
           arena = start_pose (+) odom   (start_x, start_y, start_yaw parameters)
 
 Pipeline
-  plan()     2 Hz  : LaserScan -> hit / free grid cells -> RAM-Bug decision (target cell)
+  plan()     2 Hz  : LaserScan -> hit / free grid cells -> planner decision (target cell)
+                     planner = Bug2 (default, cfg algorithm: bug2) or RAM-Bug (algorithm: ram_bug)
   control()  20 Hz : drive toward the target with a heading controller -> (v, w)
 """
 import math
@@ -36,10 +37,10 @@ def wrap(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-class RosRAMBug(eg.RAMBug):
-    """RAM-Bug fed by a real LaserScan instead of the simulator.
+class RosPlanner:
+    """Planner (RAM-Bug or Bug2) fed by a real LaserScan instead of the simulator.
     Keeps the raw obstacle cells separate and plans on an inflated copy so the
-    0.14 m wide Burger does not scrape boxes."""
+    0.14 m wide Burger does not scrape boxes. Mixed in before the eg_core planner class."""
 
     def __init__(self, params, inflate=1, detect="lidar", forget_ticks=12, motion_confirm=True,
                  shape_detect=False):
@@ -138,6 +139,14 @@ class RosRAMBug(eg.RAMBug):
         return out
 
 
+class RosRAMBug(RosPlanner, eg.RAMBug):
+    pass
+
+
+class RosBug2(RosPlanner, eg.Bug2):
+    pass
+
+
 class View:
     """What eg_core expects from the 'world': our position (in cells) and obstacles."""
 
@@ -156,7 +165,12 @@ class Brain:
         p.update(dict(robot_max_cells=cfg.get("robot_max_cells", 4),
                       robot_max_extent=cfg.get("robot_max_extent", 3),
                       motion_min_free=cfg.get("motion_min_free", 2)))
+        # Bug2: how close (m) a moving object may come before we step away, and when it is gone
+        p.update(dict(avoid_r=cfg.get("avoid_r", 1.2) / CELL, avoid_exit=cfg.get("avoid_exit", 1.4) / CELL))
         self.params = p
+        self.algorithm = str(cfg.get("algorithm", "bug2")).lower().replace("-", "_")
+        if self.algorithm not in ("bug2", "ram_bug"):
+            raise ValueError(f"algorithm '{self.algorithm}' unknown: use bug2 or ram_bug")
         # plan with a bigger capture radius: the real robot must turn before it can flee
         self.capture_cells = (cfg.get("capture_r", 0.30) + cfg.get("plan_margin", 0.0)) / CELL
         self.goal = None
@@ -208,11 +222,12 @@ class Brain:
         if cell is None:
             raise ValueError(f"goal ({gx:.2f}, {gy:.2f}) is outside the 3 x 3 m arena")
         self.goal = (gx, gy)
-        self.planner = RosRAMBug(self.params, inflate=self.cfg.get("inflate_cells", 1),
-                                 detect=str(self.cfg.get("detect_chaser", "lidar")).lower(),
-                                 forget_ticks=int(self.cfg.get("forget_ticks", 12)),
-                                 motion_confirm=bool(self.cfg.get("motion_confirm", True)),
-                                 shape_detect=bool(self.cfg.get("shape_detect", False)))
+        cls = RosBug2 if self.algorithm == "bug2" else RosRAMBug
+        self.planner = cls(self.params, inflate=self.cfg.get("inflate_cells", 1),
+                           detect=str(self.cfg.get("detect_chaser", "lidar")).lower(),
+                           forget_ticks=int(self.cfg.get("forget_ticks", 12)),
+                           motion_confirm=bool(self.cfg.get("motion_confirm", True)),
+                           shape_detect=bool(self.cfg.get("shape_detect", False)))
         self.planner.reset(cell, self.capture_cells)
         self.done = None
         self.t_start = None
@@ -313,7 +328,7 @@ class Brain:
         self.mode = self.planner.mode
         path = self.planner.race_path or []
         near_goal = math.hypot(x - self.goal[0], y - self.goal[1]) < 0.35
-        if self.mode == "RACE" and (len(path) < 2 or near_goal) or self.mode == "NAV" and near_goal:
+        if self.mode == "RACE" and (len(path) < 2 or near_goal) or self.mode in ("NAV", "MLINE") and near_goal:
             # last few cm: drive straight onto the goal (it may lie in the blocked wall ring)
             self.target = self.goal
             self.last_mode = self.mode

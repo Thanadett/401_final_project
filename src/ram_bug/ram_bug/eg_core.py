@@ -877,6 +877,7 @@ BUG2_PARAMS = dict(avoid_r=8.0,        # cells: a moving object this close -> AV
                    goal_view=3.0,      # cells: goal this close and in plain view -> leave the wall
                    max_wall_ticks=80,  # boundary following longer than this -> shortest path (NAV)
                    rush_margin=2.0,    # cells we must stay ahead of the chaser on the way to the goal (RUSH)
+                   rush_behind=0.5,    # ... when the chaser is behind us (running away keeps the gap)
                    avoid_ahead=3)      # AVOID: aim this many cells further along the chosen direction
 
 
@@ -1014,7 +1015,10 @@ class Bug2(Evader):
         chaser can get within capture range of that cell (both at the same speed), else None."""
         if self.d_goal[me] >= INF:
             return None
-        slack = self.rc + self.p["rush_margin"] + min(self.ch_age, 3)
+        first = min(neighbours(me, self.blocked), key=lambda m: self.d_goal[m])
+        (x0, y0), (x1, y1), (cx, cy) = xy(me), xy(first), self.ch_pos
+        behind = (x1 - x0) * (cx - x0 - 0.5) + (y1 - y0) * (cy - y0 - 0.5) < 0   # chaser behind the first step
+        slack = self.rc + self.p["rush_behind" if behind else "rush_margin"] + min(self.ch_age, 3)
         path, c, walked = [me], me, 0.0
         while dist(center(c), center(self.goal)) > GOAL_R:
             n = min(neighbours(c, self.blocked), key=lambda m: self.d_goal[m])

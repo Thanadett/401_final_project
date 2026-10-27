@@ -11,6 +11,14 @@ ram_bug:
     # driving
     max_lin: 0.20            # m/s  (Burger max 0.22; the planner assumes 0.2 m/s)
     max_ang: 2.5             # rad/s (Burger max 2.84)
+    drive: smooth            # smooth = curve into turns (spin only if the target is > spin_deg behind) / spin
+    spin_deg: 110.0          # (smooth) turn on the spot only when the target is further round than this
+    curve_w: 1.8             # rad/s; (smooth) turn rate while curving
+    curve_v: 0.25            # (smooth) keep at least this fraction of max_lin while curving
+    slow_dist: 0.35          # m; (smooth) something closer in front -> turn tight like spin
+    acc_lin: 0.5             # m/s^2; (smooth) acceleration limit (braking is 2x)
+    acc_ang: 6.0             # rad/s^2
+    calm_r: 2.0              # m; chaser closer than this (or AVOID/EVADE/...) -> drive like spin
     k_ang: 3.0               # heading gain
     lookahead_cells: 3       # aim this many 0.1 m cells ahead on the path
     min_aim: 0.25            # never aim closer than this (m): avoids stop-and-go on short paths

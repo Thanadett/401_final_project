@@ -106,6 +106,7 @@ ros2 launch ram_bug robot.launch.py share:=false cmd_vel_stamped:=true rviz:=tru
 | ค่า | เริ่มต้น | ปรับเมื่อ |
 |---|---|---|
 | `algorithm` | bug2 | `ram_bug` = ตัววางแผนเดิม (หนีเก่งกว่า แต่ไม่ใช่ Bug2) |
+| `drive` | smooth | `smooth` = ตีโค้งเลี้ยวไม่หยุด (หมุนอยู่กับที่เฉพาะเป้าอยู่ข้างหลังเกิน `spin_deg` 110°, ค่อย ๆ เร่ง/หน่วง) ใช้ตอนไม่มีคนไล่ใกล้กว่า `calm_r` 2 m และไม่ได้หลบอยู่ / `spin` = แบบเดิม หมุนอยู่กับที่ทุกครั้งที่ต้องเลี้ยวเกิน 75° |
 | `avoid_r` / `avoid_exit` | 1.2 / 1.4 m | (Bug2) หลบช้าไป → เพิ่ม, หลบทั้งที่ยังไกล/ไม่ถึง Goal → ลด |
 | `capture_r` | 0.30 | กติการะยะจับเปลี่ยน |
 | `max_lin` / `max_ang` | 0.20 / 2.5 | หุ่นส่ายหรือเลี้ยวไม่ทัน |
@@ -120,6 +121,7 @@ python3 src/ram_bug/test/test_brain_offline.py     # หุ่นแบบล้
 python3 src/ram_bug/test/test_brain_offline.py --chaser Friend             # คนไล่แบบทีมเพื่อน + แชร์ตำแหน่ง
 python3 src/ram_bug/test/test_brain_offline.py --chaser Friend --no-share  # เทียบกับ LiDAR อย่างเดียว
 python3 src/ram_bug/test/test_brain_offline.py --algo ram_bug              # ตัววางแผน RAM-Bug
+python3 src/ram_bug/test/test_brain_offline.py --drive spin                # คุมล้อแบบเดิม (หมุนอยู่กับที่)
 python3 src/ram_bug/test/test_node_mock.py         # เช็คว่า node รับ/ส่งข้อความถูก
 python3 src/ram_bug/test/test_peer_link.py         # เช็ค UDP รับ/ส่ง และรูปแบบข้อความ
 ```
@@ -136,6 +138,10 @@ python3 src/ram_bug/test/test_peer_link.py         # เช็ค UDP รับ/
 - การหลบวัตถุเคลื่อนที่ช่วยได้ชัด (ถึง Goal มากขึ้น 2-6 เท่าเทียบกับ Bug2 เฉย ๆ)
 - Bug2 ใช้เวลามากกว่าเล็กน้อยเมื่อไม่มีคนไล่ เพราะเดินเลียบขอบกล่อง และบางครั้งเลือกอ้อมด้านที่ยาว
   (ด้านหลังกล่องยังไม่อยู่ในแผนที่ตอนเลือก)
+
+`drive: smooth` เทียบกับ `spin` (Bug2, LiDAR อย่างเดียว, 60 รอบ): ไม่มีคนไล่ถึง Goal 20/20 ทั้งคู่ (ช้ากว่า ~0.8 s),
+ทีมเพื่อน 13/60 เทียบ 17/60, วิ่งตรงเข้าหา 20/60 เทียบ 23/60 — ในแบบจำลองหุ่นเปลี่ยนความเร็วได้ทันที แบบ `spin` จึงได้เปรียบ
+ถ้าแข่งจริงแล้วหนีไม่ทัน ลอง `drive:=spin`
 
 ผลทดสอบ offline ของ RAM-Bug (ของเดิม):
 

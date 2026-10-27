@@ -54,6 +54,9 @@ class RamBugNode(Node):
         detect_chaser="lidar",                             # lidar / off (off = test without a chaser)
         algorithm="bug2",                                  # bug2 / ram_bug
         avoid_r=1.2, avoid_exit=1.4,                       # m; Bug2 steps away from a moving object this close
+        drive="smooth",                                    # smooth (curve into turns) / spin (turn on the spot)
+        spin_deg=110.0, curve_w=1.8, curve_v=0.25, slow_dist=0.35,   # smooth driving, see config/ram_bug.yaml
+        acc_lin=0.5, acc_ang=6.0, calm_r=2.0,
         turn_gate=0.6,                                     # rad/s; scans taken while turning faster are ignored
         forget_ticks=12,                                   # forget a LiDAR chaser not seen for 12 plans (6 s)
         motion_confirm=True,                               # a moving blob must be seen in 2 scans in a row
@@ -299,6 +302,15 @@ class RamBugNode(Node):
         front = min((ranges[i] for i in self.front_idx if rmin < ranges[i] < rmax), default=9.9)
         v, w = self.brain.control(x, y, yaw, front, self.now())
         self.send(v, w)
+        b = self.brain
+        if b.t_start is not None and not b.has_moved and not b.done:
+            # a goal but no movement yet: show what we ask for (commands lost? held by stop_dist?)
+            tgt = "none" if b.target is None else (
+                f"({b.target[0]:.2f}, {b.target[1]:.2f}) "
+                f"{math.degrees(math.atan2(b.target[1] - y, b.target[0] - x) - yaw + math.pi) % 360 - 180:.0f} deg off")
+            self.get_logger().info(
+                f"not moving yet: cmd v={v:.2f} w={w:.2f}, front {front:.2f} m, target {tgt}, "
+                f"odom ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f} deg)", throttle_duration_sec=1.0)
 
     # ------------------------------------------------------------ RViz debug
     def publish_debug(self, x, y):

@@ -147,6 +147,10 @@ class RosBug2(RosPlanner, eg.Bug2):
     pass
 
 
+# running from the chaser: drive at flee_lin
+FLEE_MODES = ("AVOID", "RUSH")      # Bug2 only: 0.22 m/s scraped boxes in RAM-Bug's RACE / EVADE
+
+
 class View:
     """What eg_core expects from the 'world': our position (in cells) and obstacles."""
 
@@ -307,7 +311,8 @@ class Brain:
         if math.hypot(x - self.goal[0], y - self.goal[1]) <= eg.GOAL_R * CELL:
             self.done, self.mode, self.target = "reached", "DONE", None
             return
-        if now - self.t_start >= self.cfg.get("time_limit", 75.0):
+        limit = self.cfg.get("time_limit", 0.0)       # 0 = no time limit
+        if limit > 0 and now - self.t_start >= limit:
             self.done, self.mode, self.target = "timeout", "TIME UP", None
             return
         me = self.cell_of_xy(x, y)
@@ -333,7 +338,7 @@ class Brain:
         self.chaser_d = None if est is None else math.hypot(*(a * CELL - b for a, b in zip(eg.center(est), (x, y))))
         path = self.planner.race_path or []
         near_goal = math.hypot(x - self.goal[0], y - self.goal[1]) < 0.35
-        if self.mode == "RACE" and (len(path) < 2 or near_goal) or self.mode in ("NAV", "MLINE") and near_goal:
+        if self.mode == "RACE" and (len(path) < 2 or near_goal) or self.mode in ("NAV", "MLINE", "RUSH") and near_goal:
             # last few cm: drive straight onto the goal (it may lie in the blocked wall ring)
             self.target = self.goal
             self.last_mode = self.mode
@@ -418,6 +423,8 @@ class Brain:
                     self.stuck_ref, self.stuck_since = None, None
                     return self._out(-0.08, self.recover_w, now)
         vmax = self.cfg.get("max_lin", 0.20)
+        if self.mode in FLEE_MODES and front_min > self.cfg.get("flee_clear", 0.35):
+            vmax = self.cfg.get("flee_lin", 0.22)          # running from the chaser: full speed
         wmax = self.cfg.get("max_ang", 2.5)
         d = math.hypot(tx - x, ty - y)
         if d < 0.02:

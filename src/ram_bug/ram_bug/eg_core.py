@@ -875,7 +875,9 @@ BUG2_PARAMS = dict(avoid_r=8.0,        # cells: a moving object this close -> AV
                    avoid_goal=1.0, avoid_flee=1.5, avoid_mob=0.3,   # AVOID move score weights
                    mline_w=0.75,       # cells: how far a cell centre may be from the M-line
                    goal_view=3.0,      # cells: goal this close and in plain view -> leave the wall
-                   max_wall_ticks=80)  # boundary following longer than this -> shortest path (NAV)
+                   max_wall_ticks=80,  # boundary following longer than this -> shortest path (NAV)
+                   rush_margin=2.0,    # cells we must stay ahead of the chaser on the way to the goal (RUSH)
+                   avoid_ahead=3)      # AVOID: aim this many cells further along the chosen direction
 
 
 class Bug2(Evader):
@@ -995,8 +997,35 @@ class Bug2(Evader):
                 v = -p_["avoid_goal"] * g + p_["avoid_flee"] * min(near - self.rc, cap) + p_["avoid_mob"] * mob
             if v > bv:
                 best, bv = m, v
+        # aim further along the same direction so the robot runs instead of turning on the spot
+        # every half second (the controller only uses the part it can drive in a straight line)
         self.race_path = [me, best]
+        (x0, y0), (x1, y1) = xy(me), xy(best)
+        dx, dy = x1 - x0, y1 - y0
+        for _ in range(p_["avoid_ahead"] if best != me else 0):
+            x1, y1 = x1 + dx, y1 + dy
+            if not self.free_xy(x1, y1):
+                break
+            self.race_path.append(idx(x1, y1))
         return best
+
+    def rush_path(self, me):
+        """Shortest path to the goal if we reach every cell on it rush_margin cells before the
+        chaser can get within capture range of that cell (both at the same speed), else None."""
+        if self.d_goal[me] >= INF:
+            return None
+        slack = self.rc + self.p["rush_margin"] + min(self.ch_age, 3)
+        path, c, walked = [me], me, 0.0
+        while dist(center(c), center(self.goal)) > GOAL_R:
+            n = min(neighbours(c, self.blocked), key=lambda m: self.d_goal[m])
+            if self.d_goal[n] >= self.d_goal[c]:
+                return None
+            walked += cdist(c, n)
+            if walked + slack >= dist(self.ch_pos, center(n)):
+                return None
+            path.append(n)
+            c = n
+        return path
 
     def start_wall(self, me):
         cands = self.mline_cands(me)
@@ -1067,7 +1096,13 @@ class Bug2(Evader):
         if self.ch_est is not None:
             d = dist(rnd.e, self.ch_pos)
             if d <= self.p["avoid_r"] or (self.state == "AVOID" and d <= self.p["avoid_exit"]):
-                self.state = self.mode = "AVOID"
+                self.state = "AVOID"
+                path = self.rush_path(me)
+                if path is not None:              # we win the race to the goal: just go
+                    self.mode = "RUSH"
+                    self.race_path = path[:5]
+                    return path[1] if len(path) > 1 else me
+                self.mode = "AVOID"
                 return self.avoid(rnd, me)
         if self.state == "AVOID":                   # it is gone: new M-line from here
             self.start_mline(me)

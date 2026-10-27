@@ -319,11 +319,16 @@ class Brain:
         if me is None:
             self.mode, self.target = "OUTSIDE", self.goal
             return
-        # turning fast smears the scan: still map with it, but do not look for a NEW chaser
+        # turning fast smears the scan (LDS-02: one sweep takes 0.12 s, ~17 deg at 2.5 rad/s):
+        # do not look for a NEW chaser, and do not clear map cells with it. Clearing made box
+        # cells blink off and on, the plan flip, the robot turn, and the next scan smear again
+        # (real robot bag). Its hits are still used: tracking the chaser while dodging matters
         self.planner.turning = scan_pose is not None and abs(scan_pose[3]) > self.cfg.get("turn_gate", 0.6)
         sx_, sy_, syaw_ = scan_pose[:3] if scan_pose is not None else (x, y, yaw)
         hits, free = self.scan_to_cells(sx_, sy_, syaw_, *scan)
         self.last_hits = hits
+        if self.planner.turning and not self.cfg.get("clear_while_turning", False):
+            free = set()
         self.planner.set_scan(hits, free)
         peer = None
         if self.peer is not None and now - self.peer[2] <= self.cfg.get("peer_timeout", 0.6):

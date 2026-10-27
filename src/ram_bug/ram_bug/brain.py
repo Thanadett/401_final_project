@@ -182,6 +182,7 @@ class Brain:
         self.last_hits = set()
         self.peer = None            # (x, y, time) of the chaser from position sharing (arena metres)
         self.peer_used = False
+        self.chaser_d = None        # m from us to the chaser estimate (None = not known)
         self.last_mode = None
         self.last_v = 0.0
         self.stuck_ref = None
@@ -189,7 +190,9 @@ class Brain:
         self.recover_until = None
         self.recover_w = 1.2
         self.blocked = False
-        self.start_xy = None        # where the robot was when it got the goal
+        self.cmd_v = self.cmd_w = 0.0   # last command sent (acceleration limit)
+        self.cmd_t = None
+        self.start_xy = None       # where the robot was when it got the goal
         self.has_moved = False
 
     # ------------------------------------------------------------ frames
@@ -326,6 +329,8 @@ class Brain:
         view = View((x / CELL, y / CELL), self.planner.known, peer)
         nxt = self.planner.act(view)
         self.mode = self.planner.mode
+        est = self.planner.ch_est
+        self.chaser_d = None if est is None else math.hypot(*(a * CELL - b for a, b in zip(eg.center(est), (x, y))))
         path = self.planner.race_path or []
         near_goal = math.hypot(x - self.goal[0], y - self.goal[1]) < 0.35
         if self.mode == "RACE" and (len(path) < 2 or near_goal) or self.mode in ("NAV", "MLINE") and near_goal:
@@ -388,7 +393,7 @@ class Brain:
         """Returns (v, w). front_min = closest LiDAR range in +-30 deg in front."""
         if self.target is None:
             self.stuck_ref, self.stuck_since = None, None
-            return 0.0, 0.0
+            return self._out(0.0, 0.0, now)
         tx, ty = self.target
         err = wrap(math.atan2(ty - y, tx - x) - yaw)
         # stuck recovery: we keep asking to drive but do not move -> back up and turn.
@@ -402,7 +407,7 @@ class Brain:
             self.has_moved = True
         if now is not None:
             if self.recover_until and now < self.recover_until:
-                return -0.08, self.recover_w
+                return self._out(-0.08, self.recover_w, now)
             if self.last_v > 0.05 and (self.has_moved or self.blocked):
                 limit = self.cfg.get("blocked_time", 0.5) if self.blocked else self.cfg.get("stuck_time", 2.0)
                 if self.stuck_ref is None or math.hypot(x - self.stuck_ref[0], y - self.stuck_ref[1]) > 0.03:
@@ -411,19 +416,49 @@ class Brain:
                     self.recover_until = now + 0.6
                     self.recover_w = 1.2 if err >= 0 else -1.2     # turn toward the target side
                     self.stuck_ref, self.stuck_since = None, None
-                    return -0.08, self.recover_w
+                    return self._out(-0.08, self.recover_w, now)
         vmax = self.cfg.get("max_lin", 0.20)
         wmax = self.cfg.get("max_ang", 2.5)
         d = math.hypot(tx - x, ty - y)
         if d < 0.02:
-            return 0.0, 0.0
+            return self._out(0.0, 0.0, now)
+        # drive: smooth = keep rolling and curve into turns, spin on the spot only when the target
+        # is far behind us. spin = spin on the spot for every turn over 75 deg, full turn rate,
+        # no acceleration limit: always used while a chaser is near (or AVOID, EVADE, RACE, ...),
+        # where turning round fast matters more than a smooth ride
+        smooth = (str(self.cfg.get("drive", "smooth")).lower() == "smooth"
+                  and self.mode in ("MLINE", "WALL", "NAV")
+                  and (self.chaser_d is None or self.chaser_d > self.cfg.get("calm_r", 2.0)))
+        spin_deg = self.cfg.get("spin_deg", 110.0) if smooth else 75.0
+        if smooth and abs(err) <= math.radians(spin_deg):
+            wmax = min(wmax, self.cfg.get("curve_w", 1.8))  # a gentler arc (and fewer smeared scans)
         w = max(-wmax, min(wmax, self.cfg.get("k_ang", 3.0) * err))
-        if abs(err) > math.radians(75):
+        if abs(err) > math.radians(spin_deg):
             v = 0.0                                        # turn on the spot first
+        elif smooth and front_min > self.cfg.get("slow_dist", 0.35):
+            v = vmax * max(self.cfg.get("curve_v", 0.25), math.cos(err))
         else:
-            v = vmax * max(0.0, math.cos(err))
+            v = vmax * max(0.0, math.cos(err))             # close to something: turn tight
         self.last_v = v
         self.blocked = front_min < self.cfg.get("stop_dist", 0.17)
+        if smooth:
+            v, w = self._ramp(v, w, now)
         if self.blocked:
             v = 0.0                                        # safety: something right in front
+        return self._out(v, w, now)
+
+    def _ramp(self, v, w, now):
+        """Limit acceleration so the robot does not jerk. Braking is twice as fast."""
+        dt = self.cfg.get("control_period", 0.05)
+        if now is not None and self.cmd_t is not None and 0.0 < now - self.cmd_t < 0.5:
+            dt = now - self.cmd_t
+        acc_v, acc_w = self.cfg.get("acc_lin", 0.5) * dt, self.cfg.get("acc_ang", 6.0) * dt
+        up_v = acc_v if abs(v) > abs(self.cmd_v) else 2 * acc_v
+        up_w = acc_w if abs(w) > abs(self.cmd_w) else 2 * acc_w
+        v = self.cmd_v + max(-up_v, min(up_v, v - self.cmd_v))
+        w = self.cmd_w + max(-up_w, min(up_w, w - self.cmd_w))
+        return v, w
+
+    def _out(self, v, w, now):
+        self.cmd_v, self.cmd_w, self.cmd_t = v, w, now
         return v, w

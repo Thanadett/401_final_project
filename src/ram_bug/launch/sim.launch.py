@@ -55,7 +55,8 @@ def setup(context):
         parameters=[os.path.join(share, "config", "ram_bug.yaml"),
                     {"use_sim_time": use_sim_time, "start_x": sx, "start_y": sy, "start_yaw": 0.0,
                      "goal_x": goal_x, "goal_y": goal_y, "cmd_vel_stamped": "true",
-                     "algorithm": context.launch_configurations["algorithm"]}])
+                     "algorithm": context.launch_configurations["algorithm"],
+                     "drive": context.launch_configurations["drive"]}])
     chaser = Node(
         package="ram_bug", executable="trap_chaser_node", name="trap_chaser", output="screen",
         parameters=[{"use_sim_time": use_sim_time, "world_json": os.path.join(share, "worlds", world + ".json"),
@@ -86,6 +87,7 @@ def generate_launch_description():
         DeclareLaunchArgument("share", default_value="true", description="share positions over UDP (like the real match)"),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("algorithm", default_value="bug2", description="bug2 or ram_bug"),
+        DeclareLaunchArgument("drive", default_value="smooth", description="smooth or spin"),
         SetEnvironmentVariable("TURTLEBOT3_MODEL", "burger"),
         AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", os.path.join(tb3, "models")),
         OpaqueFunction(function=setup),

@@ -183,6 +183,27 @@ def test_bug2_avoids_moving_chaser():
     assert reached[1.2] >= 4 and reached[1.2] > reached[0.0] + 2, reached
 
 
+def test_bug2_rushes_to_a_near_goal():
+    """Real robot log: AVOID for 68 s, 0.37 m from the goal with the chaser 1.06 m away on the
+    far side. It must run for the goal (RUSH) when it gets there first."""
+    from ram_bug.brain import View
+    b = Brain(dict(capture_r=0.30, start_x=0.0, start_y=0.0, start_yaw=0.0, algorithm="bug2",
+                   detect_chaser="off"))
+    b.set_goal(2.10, 1.06)
+    pl = b.planner
+    pl.set_scan(set(), set())
+    view = View((21.0, 14.3), pl.known)
+    pl.act(view)
+    ch = b.cell_of_xy(1.05, 1.55)
+    pl.state, pl.ch_est, pl.ch_pos, pl.ch_age = "AVOID", ch, eg.center(ch), 0
+    nxt = pl.decide(view, b.cell_of_xy(2.10, 1.43))
+    assert pl.mode == "RUSH" and eg.center(nxt)[1] < 14.3, (pl.mode, eg.center(nxt))
+    ch = b.cell_of_xy(2.10, 0.75)                   # chaser right behind the goal: keep dodging
+    pl.ch_est, pl.ch_pos = ch, eg.center(ch)
+    pl.decide(view, b.cell_of_xy(2.10, 1.43))
+    assert pl.mode == "AVOID", pl.mode
+
+
 def body_touches(x, y, yaw, obst, r=0.09):
     """Real Burger footprint: ~0.09 m around the LDS, which sits 0.032 m behind base_footprint."""
     cx, cy = x - 0.032 * math.cos(yaw), y - 0.032 * math.sin(yaw)

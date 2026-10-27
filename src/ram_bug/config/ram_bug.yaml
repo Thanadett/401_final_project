@@ -3,7 +3,7 @@ ram_bug:
   ros__parameters:
     # competition rules
     capture_r: 0.30          # caught when centres are this close
-    time_limit: 75.0         # stop after this many seconds (time up = draw)
+    time_limit: 0.0          # s; stop after this long (time up = draw), 0 = no limit
     # planner
     algorithm: bug2          # bug2 = M-line + wall following + LiDAR moving-object avoidance / ram_bug
     avoid_r: 1.2             # m; (bug2) a moving object this close -> AVOID: step away, still toward the goal
@@ -11,6 +11,8 @@ ram_bug:
     # driving
     max_lin: 0.20            # m/s  (Burger max 0.22; the planner assumes 0.2 m/s)
     max_ang: 2.5             # rad/s (Burger max 2.84)
+    flee_lin: 0.22           # m/s while running from the chaser (Bug2 AVOID / RUSH)
+    flee_clear: 0.35         # m; ... only with this much room in front (else max_lin): faster scraped boxes
     drive: smooth            # smooth = curve into turns (spin only if the target is > spin_deg behind) / spin
     spin_deg: 110.0          # (smooth) turn on the spot only when the target is further round than this
     curve_w: 1.8             # rad/s; (smooth) turn rate while curving

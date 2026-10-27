@@ -39,8 +39,8 @@ class RamBugNode(Node):
     PARAMS = dict(
         goal_x=float("nan"), goal_y=float("nan"),          # arena metres (nan = wait for /goal_pose)
         start_x=0.15, start_y=0.15, start_yaw=0.0,          # where the robot starts in the arena
-        capture_r=0.30, time_limit=75.0,
-        max_lin=0.20, max_ang=2.5, k_ang=3.0, lookahead_cells=3, stop_dist=0.17, stuck_time=2.0,
+        capture_r=0.30, time_limit=0.0,                   # s; 0 = no time limit
+        max_lin=0.20, flee_lin=0.22, flee_clear=0.35, max_ang=2.5, k_ang=3.0, lookahead_cells=3, stop_dist=0.17, stuck_time=2.0,
         blocked_time=0.5,                                  # s held by stop_dist -> back up and turn
         min_aim=0.25, smooth_deg=15.0,                     # m: never aim closer; deg: smooth smaller turns
         inflate_cells=1, robot_max_cells=4, robot_max_extent=3, motion_min_free=2,
@@ -93,6 +93,7 @@ class RamBugNode(Node):
             self.get_logger().warn("planner: pure Python (sudo apt install python3-scipy for ~2x faster planning)")
         self.localized = not cfg["auto_start"]
         self.auto_buf = []
+        self._last_log = 0.0
         self.pending_goal = None
         self.tf_static = None
         if cfg["auto_start"]:
@@ -281,15 +282,17 @@ class RamBugNode(Node):
         src = "shared" if self.brain.peer_used else "lidar"
         mode = f"{self.brain.mode} (chaser from {src})"
         self.mode_pub.publish(String(data=mode))
-        if mode != getattr(self, "_last_mode", None):       # print every state change to the console
-            self._last_mode = mode
+        # print every state change to the console, and every 5 s while it stays the same
+        if mode != getattr(self, "_last_mode", None) or self.now() - self._last_log >= 5.0:
+            self._last_mode, self._last_log = mode, self.now()
             t = 0.0 if self.brain.t_start is None else self.now() - self.brain.t_start
             pl = self.brain.planner
             ch = ""
             if pl is not None and pl.ch_est is not None:
                 cx, cy = eg.center(pl.ch_est)
                 ch = f", chaser ({cx * eg.CELL:.2f}, {cy * eg.CELL:.2f}) {math.hypot(cx * eg.CELL - x, cy * eg.CELL - y):.2f} m away"
-            self.get_logger().info(f"[{t:5.1f} s] {mode} at ({x:.2f}, {y:.2f}){ch}")
+            b = self.brain
+            self.get_logger().info(f"[{t:5.1f} s] {mode} at ({x:.2f}, {y:.2f}){ch}, cmd v={b.cmd_v:.2f} w={b.cmd_w:.2f}")
         self.publish_debug(x, y)
 
     def on_control(self):

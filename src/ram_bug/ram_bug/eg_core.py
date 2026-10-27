@@ -867,6 +867,236 @@ class RAMBug(Evader):
         return self.territory_move(rnd, me) if self.use_terr else self.lookahead(rnd, me)
 
 
+# ================================================================== Bug2
+DIRS8 = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]   # counter-clockwise
+
+BUG2_PARAMS = dict(avoid_r=8.0,        # cells: a moving object this close -> AVOID
+                   avoid_exit=10.0,    # cells: back to Bug2 (new M-line) once it is this far
+                   avoid_goal=1.0, avoid_flee=1.5, avoid_mob=0.3,   # AVOID move score weights
+                   mline_w=0.75,       # cells: how far a cell centre may be from the M-line
+                   goal_view=3.0,      # cells: goal this close and in plain view -> leave the wall
+                   max_wall_ticks=80)  # boundary following longer than this -> shortest path (NAV)
+
+
+class Bug2(Evader):
+    """Bug2 to the goal, plus avoidance of the moving object found by LiDAR (perceive_chaser).
+
+      MLINE : drive along the M-line (straight line from where we started to the goal)
+      WALL  : the next M-line cell is blocked -> remember the hit point and follow the obstacle
+              boundary (obstacle kept on one side) until we are back on the M-line, closer to the
+              goal than the hit point, with the M-line ahead free
+      AVOID : the moving object is within avoid_r: take the step that keeps the most distance
+              from its worst reply while still heading for the goal; once it is past avoid_exit
+              start a new M-line from where we are (the old one is behind us)
+      NAV   : went all the way round the obstacle on both sides: shortest path on the map
+    The side to go round is the one whose first step is shorter to the goal on the map.
+    """
+    name = "Bug2"
+
+    def __init__(self, params=None):
+        self.p = dict(BUG2_PARAMS)
+        if params:
+            self.p.update(params)
+
+    def reset(self, goal, capture_cells):
+        super().reset(goal, capture_cells)
+        self.state = "MLINE"
+        self.m_start = None
+        self.hit, self.hit_d = None, INF
+        self.wall, self.side, self.flipped = None, 1, False
+        self.wall_ticks, self.wall_far, self.last_cell = 0, 0.0, None
+        self.blocked = set()
+
+    # ---------- geometry
+    def start_mline(self, me):
+        self.state, self.m_start = "MLINE", me
+        self.hit, self.hit_d, self.flipped = None, INF, False
+
+    def mline_dist(self, c):
+        """Distance (cells) from the centre of c to the M-line segment."""
+        ax, ay = xy(self.m_start)
+        bx, by = xy(self.goal)
+        px, py = xy(c)
+        vx, vy = bx - ax, by - ay
+        L2 = vx * vx + vy * vy
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / L2))
+        return math.hypot(px - ax - t * vx, py - ay - t * vy)
+
+    def free_xy(self, x, y):
+        return 0 <= x < W and 0 <= y < H and y * W + x not in self.blocked
+
+    def mline_cands(self, c):
+        """Neighbours of c that stay on the M-line and get closer to the goal, best first."""
+        x, y = xy(c)
+        gd = cdist(c, self.goal)
+        out = [idx(x + dx, y + dy) for dx, dy in DIRS8 if 0 <= x + dx < W and 0 <= y + dy < H]
+        out = [n for n in out if self.mline_dist(n) <= self.p["mline_w"] and cdist(n, self.goal) < gd - 0.5]
+        return sorted(out, key=lambda n: cdist(n, self.goal))
+
+    def mline_next(self, c):
+        legal = neighbours(c, self.blocked, stay=False)
+        return next((n for n in self.mline_cands(c) if n in legal), None)
+
+    def wall_near(self, c, ref):
+        """The blocked neighbour (x, y) of c closest to ref (cells outside the grid count as
+        blocked: the arena wall), or None when c is out in the open."""
+        x, y = xy(c)
+        best = None
+        for dx, dy in DIRS8:
+            if not self.free_xy(x + dx, y + dy):
+                d = (x + dx - ref[0]) ** 2 + (y + dy - ref[1]) ** 2
+                if best is None or d < best[0]:
+                    best = (d, (x + dx, y + dy))
+        return None if best is None else best[1]
+
+    def wall_step(self, c, wall, side):
+        """One boundary-following step from c with the blocked cell `wall` on our right (side=1)
+        or left (side=-1): turn from the wall toward the open side and take the first free move.
+        Returns (next cell, blocked cell next to it to keep following) or (None, wall)."""
+        x, y = xy(c)
+        k0 = DIRS8.index((wall[0] - x, wall[1] - y))
+        last = wall
+        for i in range(1, 8):
+            dx, dy = DIRS8[(k0 + side * i) % 8]
+            if not self.free_xy(x + dx, y + dy):
+                last = (x + dx, y + dy)
+            elif not (dx and dy) or (self.free_xy(x + dx, y) and self.free_xy(x, y + dy)):
+                return idx(x + dx, y + dy), last      # (a diagonal must not cut a corner)
+        return None, wall
+
+    def path_ahead(self, me, step, k=4):
+        """me + up to k cells of the same rule, for the controller's lookahead."""
+        path, c = [me], me
+        for _ in range(k):
+            c = step(c)
+            if c is None or c in path:
+                break
+            path.append(c)
+        return path
+
+    # ---------- modes
+    def avoid(self, rnd, me):
+        """One-step minimax away from the moving object, still pulled toward the goal."""
+        p_ = self.p
+        age = min(self.ch_age, 3)
+        cap = p_["avoid_exit"] - self.rc
+        creplies = [advance(self.ch_pos, cn, self.known) for cn in neighbours(self.ch_est, self.known)]
+        best, bv = me, -INF
+        for m in neighbours(me, self.blocked):
+            p = advance(rnd.e, m, self.blocked)
+            near = min(dist(p, q) for q in creplies) - age
+            if near <= self.rc:
+                v = -1e5 + near
+            elif dist(p, center(self.goal)) <= GOAL_R:
+                v = 1e5
+            else:
+                g = self.d_goal[m] if self.d_goal[m] < INF else cdist(m, self.goal) + 50
+                mob = len(neighbours(m, self.blocked, stay=False)) / 8.0
+                v = -p_["avoid_goal"] * g + p_["avoid_flee"] * min(near - self.rc, cap) + p_["avoid_mob"] * mob
+            if v > bv:
+                best, bv = m, v
+        self.race_path = [me, best]
+        return best
+
+    def start_wall(self, me):
+        cands = self.mline_cands(me)
+        ref = xy(cands[0]) if cands else xy(self.goal)
+        wall = self.wall_near(me, ref)
+        if wall is None:                      # nothing blocked next to us: just restart the line
+            self.start_mline(me)
+            return False
+        self.state, self.hit, self.hit_d, self.wall = "WALL", me, cdist(me, self.goal), wall
+        self.wall_ticks, self.wall_far, self.flipped = 0, 0.0, False
+        opts = []
+        for side in (1, -1):
+            n, _ = self.wall_step(me, wall, side)
+            if n is not None:
+                opts.append((self.d_goal[n], -side, side))
+        self.side = min(opts)[2] if opts else 1
+        return True
+
+    def follow_wall(self, me):
+        """Returns the next cell, or None when Bug2 left the wall (state changed)."""
+        wall = self.wall_near(me, self.wall)
+        if wall is None:                      # the obstacle vanished from the map (it was noise)
+            self.start_mline(me)
+            return None
+        gd = cdist(me, self.goal)
+        if me != self.hit and self.mline_dist(me) <= self.p["mline_w"] and gd < self.hit_d - 0.5 \
+                and self.mline_next(me) is not None:
+            self.state = "MLINE"              # Bug2 leave point
+            return None
+        if gd <= self.p["goal_view"] and line_of_sight(me, self.goal, self.blocked - {me, self.goal}):
+            self.start_mline(me)              # the goal is right there in plain view: drive onto it
+            self.mode, self.race_path = "MLINE", [me, self.goal]
+            return self.goal
+        if me != self.last_cell:
+            self.wall_ticks += 1
+            self.wall_far = max(self.wall_far, cdist(me, self.hit))
+        if self.wall_far >= 3 and cdist(me, self.hit) <= 1:
+            # back at the hit point without finding a leave point: try the other way round once
+            if self.flipped:
+                self.state = "NAV"
+                return None
+            self.side, self.flipped, self.wall_far = -self.side, True, 0.0
+        if self.wall_ticks > self.p["max_wall_ticks"]:
+            self.state = "NAV"
+            return None
+        nxt, self.wall = self.wall_step(me, wall, self.side)
+        if nxt is None:
+            return me
+        state = {"wall": self.wall}
+
+        def step(c):                          # same rule from the next cells, without changing state
+            n, state["wall"] = self.wall_step(c, state["wall"], self.side)
+            return n
+        self.race_path = [me] + self.path_ahead(nxt, step, 3)
+        return nxt
+
+    def act(self, rnd):
+        me, _, _ = self.sense(rnd)
+        self.blocked = self.known - {self.goal}     # the goal may sit in the inflated wall ring
+        self.race_path, self.race_region = [], set()
+        if self.m_start is None:
+            self.start_mline(me)
+        nxt = self.decide(rnd, me)
+        self.last_cell = me
+        return nxt
+
+    def decide(self, rnd, me):
+        if self.ch_est is not None:
+            d = dist(rnd.e, self.ch_pos)
+            if d <= self.p["avoid_r"] or (self.state == "AVOID" and d <= self.p["avoid_exit"]):
+                self.state = self.mode = "AVOID"
+                return self.avoid(rnd, me)
+        if self.state == "AVOID":                   # it is gone: new M-line from here
+            self.start_mline(me)
+        for _ in range(3):                          # a mode may hand over to the next one
+            if self.state == "NAV":
+                self.mode = "NAV"
+                nxt = self.go_to_goal(me)
+                self.race_path = self.path_ahead(me, lambda c: min(
+                    neighbours(c, self.blocked), key=lambda n: self.d_goal[n]))
+                return nxt
+            if self.state == "MLINE":
+                self.mode = "MLINE"
+                if self.mline_dist(me) > self.p["mline_w"]:   # pushed off the line (drift): new one
+                    self.start_mline(me)
+                nxt = self.mline_next(me)
+                if nxt is not None:
+                    self.race_path = self.path_ahead(me, self.mline_next)
+                    return nxt
+                if not self.mline_cands(me):        # standing on the goal cell
+                    return me
+                if not self.start_wall(me):         # hit point
+                    continue
+            self.mode = "WALL"
+            nxt = self.follow_wall(me)
+            if nxt is not None:
+                return nxt
+        return me
+
+
 # ================================================================== CHASERS
 class Chaser:
     name = "chaser"
@@ -1127,7 +1357,7 @@ def load_params():
 
 
 def make_evader(kind, params=None):
-    if params is None and kind not in ("A*-Replan", "APF"):
+    if params is None and kind not in ("A*-Replan", "APF", "Bug2"):
         params = load_params()
     if kind == "RAM-Bug":
         return RAMBug(params)
@@ -1143,6 +1373,8 @@ def make_evader(kind, params=None):
         return RAMBug(params, dormant=False, name="RAM-noDormant")
     if kind == "RAM-noBayes":
         return RAMBug(params, bayes=False, name="RAM-noBayes")
+    if kind == "Bug2":
+        return Bug2()
     if kind == "A*-Replan":
         return AStarReplan()
     if kind == "APF":

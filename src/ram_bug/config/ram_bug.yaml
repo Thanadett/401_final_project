@@ -4,6 +4,10 @@ ram_bug:
     # competition rules
     capture_r: 0.30          # caught when centres are this close
     time_limit: 75.0         # stop after this many seconds (time up = draw)
+    # planner
+    algorithm: bug2          # bug2 = M-line + wall following + LiDAR moving-object avoidance / ram_bug
+    avoid_r: 1.2             # m; (bug2) a moving object this close -> AVOID: step away, still toward the goal
+    avoid_exit: 1.4          # m; (bug2) back to Bug2 with a new M-line once it is this far
     # driving
     max_lin: 0.20            # m/s  (Burger max 0.22; the planner assumes 0.2 m/s)
     max_ang: 2.5             # rad/s (Burger max 2.84)

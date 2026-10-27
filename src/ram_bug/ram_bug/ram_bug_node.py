@@ -1,6 +1,7 @@
 """
-ram_bug_node - RAM-Bug evader for TurtleBot3 (ROS 2 Jazzy)
-==========================================================
+ram_bug_node - goal-reaching evader for TurtleBot3 (ROS 2 Jazzy)
+================================================================
+Planner: Bug2 + LiDAR moving-object avoidance (algorithm:=bug2, default) or RAM-Bug (algorithm:=ram_bug)
 Subscribes  /scan (LaserScan), /odom (Odometry), /goal_pose (PoseStamped, optional)
 Publishes   /cmd_vel (Twist or TwistStamped, auto-detected)
             /ram_bug/mode (String), /ram_bug/map (OccupancyGrid, frame 'arena'),
@@ -51,6 +52,8 @@ class RamBugNode(Node):
         peer_timeout=0.6,                                  # s; older than this -> fall back to LiDAR
         plan_margin=0.0,                                   # m added to capture_r when planning
         detect_chaser="lidar",                             # lidar / off (off = test without a chaser)
+        algorithm="bug2",                                  # bug2 / ram_bug
+        avoid_r=1.2, avoid_exit=1.4,                       # m; Bug2 steps away from a moving object this close
         turn_gate=0.6,                                     # rad/s; scans taken while turning faster are ignored
         forget_ticks=12,                                   # forget a LiDAR chaser not seen for 12 plans (6 s)
         motion_confirm=True,                               # a moving blob must be seen in 2 scans in a row
@@ -80,6 +83,7 @@ class RamBugNode(Node):
                 tuned = json.load(f)["params"]
             self.get_logger().info(f"loaded tuned parameters from {pf}")
         self.brain = Brain(cfg, tuned)
+        self.get_logger().info(f"planner: {self.brain.algorithm}")
         if eg._np is not None:
             self.get_logger().info("planner: numpy + scipy fast path")
         else:

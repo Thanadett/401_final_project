@@ -198,6 +198,10 @@ def test_bug2_rushes_to_a_near_goal():
     pl.state, pl.ch_est, pl.ch_pos, pl.ch_age = "AVOID", ch, eg.center(ch), 0
     nxt = pl.decide(view, b.cell_of_xy(2.10, 1.43))
     assert pl.mode == "RUSH" and eg.center(nxt)[1] < 14.3, (pl.mode, eg.center(nxt))
+    ch = b.cell_of_xy(2.10, 1.85)                   # chaser 0.42 m right behind us: run, do not turn
+    pl.ch_est, pl.ch_pos = ch, eg.center(ch)
+    pl.decide(view, b.cell_of_xy(2.10, 1.43))
+    assert pl.mode == "RUSH", pl.mode
     ch = b.cell_of_xy(2.10, 0.75)                   # chaser right behind the goal: keep dodging
     pl.ch_est, pl.ch_pos = ch, eg.center(ch)
     pl.decide(view, b.cell_of_xy(2.10, 1.43))

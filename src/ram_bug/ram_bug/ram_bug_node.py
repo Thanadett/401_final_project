@@ -292,7 +292,12 @@ class RamBugNode(Node):
                 cx, cy = eg.center(pl.ch_est)
                 ch = f", chaser ({cx * eg.CELL:.2f}, {cy * eg.CELL:.2f}) {math.hypot(cx * eg.CELL - x, cy * eg.CELL - y):.2f} m away"
             b = self.brain
-            self.get_logger().info(f"[{t:5.1f} s] {mode} at ({x:.2f}, {y:.2f}){ch}, cmd v={b.cmd_v:.2f} w={b.cmd_w:.2f}")
+            aim = ""
+            if b.target is not None:
+                off = math.atan2(b.target[1] - y, b.target[0] - x) - yaw
+                aim = f", target {math.degrees(math.atan2(math.sin(off), math.cos(off))):.0f} deg off"
+            self.get_logger().info(f"[{t:5.1f} s] {mode} at ({x:.2f}, {y:.2f}) heading {math.degrees(yaw):.0f} deg{ch}"
+                                   f"{aim}, cmd v={b.cmd_v:.2f} w={b.cmd_w:.2f}")
         self.publish_debug(x, y)
 
     def on_control(self):

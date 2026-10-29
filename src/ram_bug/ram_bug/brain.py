@@ -128,7 +128,7 @@ class RosPlanner:
             out = self.sense_shared(me, hits, free, (), eg.cell_of(peer), peer)
         else:
             out = self.sense_scan(me, hits, free)
-            if self.ch_est is not None and self.ch_age >= self.forget_ticks:
+            if self.ch_est is not None and self.ch_age >= min(self.forget_ticks, 10):   # ch_age stops at 10
                 # not seen for a while: probably a false detection -> forget it
                 self.robot_cells.discard(self.ch_est)
                 self.ch_est, self.ch_age, self.detect_how, self.ever_moved = None, 0, "", False
@@ -472,5 +472,12 @@ class Brain:
         return v, w
 
     def _out(self, v, w, now):
+        # keep each wheel within what the Burger really does (~0.20 m/s): faster requests were not
+        # followed (real robot bag: v=0.15 w=-1.8 asks 0.29 m/s of one wheel -> 0.02 m/s for 8 s).
+        # Give up forward speed first so the turn stays as asked
+        top, half = self.cfg.get("max_wheel", 0.20), 0.5 * self.cfg.get("wheel_base", 0.160)
+        if top > 0 and abs(v) + half * abs(w) > top:
+            w = max(-top / half, min(top / half, w))
+            v = math.copysign(max(0.0, top - half * abs(w)), v)
         self.cmd_v, self.cmd_w, self.cmd_t = v, w, now
         return v, w

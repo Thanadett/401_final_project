@@ -21,6 +21,8 @@ ram_bug:
     acc_lin: 0.5             # m/s^2; (smooth) acceleration limit (braking is 2x)
     acc_ang: 6.0             # rad/s^2
     calm_r: 2.0              # m; chaser closer than this (or AVOID/EVADE/...) -> drive like spin
+    max_wheel: 0.20          # m/s; no wheel is asked more (faster was not followed: robot crawled), 0 = off
+    wheel_base: 0.160        # m between the wheels (Burger)
     k_ang: 3.0               # heading gain
     lookahead_cells: 3       # aim this many 0.1 m cells ahead on the path
     min_aim: 0.25            # never aim closer than this (m): avoids stop-and-go on short paths

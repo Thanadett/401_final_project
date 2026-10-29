@@ -57,6 +57,7 @@ class RamBugNode(Node):
         drive="smooth",                                    # smooth (curve into turns) / spin (turn on the spot)
         spin_deg=110.0, curve_w=1.8, curve_v=0.25, slow_dist=0.35,   # smooth driving, see config/ram_bug.yaml
         acc_lin=0.5, acc_ang=6.0, calm_r=2.0,
+        max_wheel=0.20, wheel_base=0.160,                  # m/s each wheel really reaches; m between wheels
         turn_gate=0.6,                                     # rad/s; scans taken while turning faster are ignored
         forget_ticks=12,                                   # forget a LiDAR chaser not seen for 12 plans (6 s)
         motion_confirm=True,                               # a moving blob must be seen in 2 scans in a row

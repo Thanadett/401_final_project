@@ -232,6 +232,54 @@ def test_bug2_wall_follow_survives_a_drift():
     assert pl.mode == "WALL" and eg.xy(nxt)[0] > 14, (pl.mode, eg.xy(nxt))
 
 
+def test_no_wheel_is_asked_more_than_it_does():
+    """Real robot bag: v=0.15 w=-1.8 asks 0.29 m/s of one wheel; the robot crawled at 0.02 m/s
+    for 8 s. Each wheel is kept at 0.20 m/s, giving up forward speed, not the turn."""
+    b = Brain(dict(start_x=0.0, start_y=0.0, start_yaw=0.0))
+    v, w = b._out(0.15, -1.8, 0.0)
+    assert abs(w + 1.8) < 1e-9 and abs(v + 0.08 * abs(w) - 0.20) < 1e-9, (v, w)
+    v, w = b._out(0.0, 2.84, 0.0)                    # spinning faster than a wheel can
+    assert v == 0.0 and abs(w - 2.5) < 1e-9, (v, w)
+    assert b._out(0.10, 0.5, 0.0) == (0.10, 0.5)     # within the limit: unchanged
+
+
+def test_tracker_drops_a_still_blob_for_the_real_chaser():
+    """Real robot bag: a box edge flickering between two cells looked like motion. It was tracked
+    for 12 s (and never forgotten) while the chaser drove into us from the other side."""
+    pl = eg.Bug2()
+    pl.reset(eg.idx(25, 5), 3.0)
+    me, box = eg.idx(5, 25), eg.idx(15, 24)
+    for c in (box, eg.idx(16, 24)) + tuple(eg.idx(x, 26) for x in range(5, 25)):
+        pl.free_count[c] = 5                         # all seen empty before: hits there look like motion
+    for k in range(12):                              # the box edge flickers between two cells
+        pl.sense_scan(me, {box if k % 2 else eg.idx(16, 24)}, set())
+    assert pl.ch_est is None and box in pl.still_cells, (pl.ch_est, pl.ch_still)
+    pl.sense_scan(me, {box}, set())
+    assert pl.ch_est is None                         # not found again
+    for x in range(20, 13, -1):                      # the chaser drives at us along y = 2.6
+        pl.sense_scan(me, {eg.idx(x, 26)}, set())
+    assert pl.ch_est == eg.idx(14, 26), pl.ch_est and eg.xy(pl.ch_est)
+    far = eg.idx(1, 12)                              # tracking wall noise far away ...
+    pl.ch_est, pl.ch_pos, pl.ch_age, pl.ch_anchor = far, eg.center(far), 0, far
+    pl.free_count[far] = 5
+    pl.sense_scan(me, {far, eg.idx(9, 26)}, set())  # ... while something moves 0.4 m from us
+    assert pl.ch_est == eg.idx(9, 26), eg.xy(pl.ch_est)
+
+
+def test_a_lost_chaser_is_forgotten():
+    """ch_age stops at 10, so forget_ticks: 12 never forgot a LiDAR estimate on the robot."""
+    b = Brain(dict(start_x=0.0, start_y=0.0, start_yaw=0.0, algorithm="bug2", forget_ticks=12))
+    b.set_goal(2.5, 0.5)
+    pl = b.planner
+    ch = eg.idx(12, 17)
+    pl.ch_est, pl.ch_pos, pl.ch_age, pl.ever_moved = ch, eg.center(ch), 0, True
+    from ram_bug.brain import View
+    for _ in range(12):
+        pl.set_scan(set(), set())
+        pl.sense(View((5.5, 25.5), pl.known))
+    assert pl.ch_est is None, (pl.ch_age, eg.xy(pl.ch_est))
+
+
 def body_touches(x, y, yaw, obst, r=0.09):
     """Real Burger footprint: ~0.09 m around the LDS, which sits 0.032 m behind base_footprint."""
     cx, cy = x - 0.032 * math.cos(yaw), y - 0.032 * math.sin(yaw)

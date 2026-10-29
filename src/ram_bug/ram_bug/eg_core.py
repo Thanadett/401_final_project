@@ -351,6 +351,8 @@ class Evader:
         self.pending = None           # unconfirmed chaser candidate
         self.robot_cells = set()      # cells where we have seen the other robot (never walls)
         self.ever_moved = False
+        self.ch_anchor, self.ch_still = None, 0  # where the track last moved to, scans seen there since
+        self.still_cells = set()      # a track sat here for ever: flicker, not motion
         self.anchor = None
         self.detect_how = ""
         self.perc = {"seen": 0, "missed": 0, "false": 0}
@@ -363,14 +365,14 @@ class Evader:
         cands = []
         for g in clusters(hits):
             need = self.p.get("motion_min_free", 1)
-            moved = [c for c in g if self.free_count.get(c, 0) >= need]
+            moved = [c for c in g if self.free_count.get(c, 0) >= need and c not in self.still_cells]
             gx = [xy(c)[0] for c in g]
             gy = [xy(c)[1] for c in g]
             extent = max(max(gx) - min(gx), max(gy) - min(gy)) + 1
             small = len(g) <= self.p.get("robot_max_cells", 1) and extent <= self.p.get("robot_max_extent", 1)
             if moved and (small or len(moved) == len(g) or len(g) <= 4):
                 cands.append((0, moved[0], "motion", g))
-            elif small:
+            elif small and not any(c in self.still_cells for c in g):
                 mx, my = sum(gx) / len(g), sum(gy) / len(g)
                 c = min(g, key=lambda q: (xy(q)[0] - mx) ** 2 + (xy(q)[1] - my) ** 2)
                 # a small return right next to a known wall is just the visible corner of a box
@@ -382,13 +384,26 @@ class Evader:
                                if (dx or dy) and 0 <= x + dx < W and 0 <= y + dy < H)
                 if not touching:
                     cands.append((1, c, "shape", g))
+        prev, self.prev_motion = getattr(self, "prev_motion", []), [c[1] for c in cands if c[0] == 0]
         if not cands:
             return None, set(), ""
+        me = getattr(self, "me", None)
         if self.ch_est is not None:
             near = [c for c in cands if cdist(c[1], self.ch_est) <= 3 + self.ch_age]
-            if near:
+            # something moving much closer to us than the one we track is the bigger danger (real
+            # robot bag: locked onto wall noise 1.1 m away while the chaser drove into us)
+            closer = [] if me is None else [c for c in cands if c[0] == 0 and c not in near and
+                                            cdist(c[1], me) + 3 < cdist(self.ch_est, me)]
+            if closer:
+                cands = closer
+            elif near:
                 cands = near
-        rank, cell, how, group = min(cands, key=lambda c: (c[0], cdist(c[1], self.ch_est) if self.ch_est is not None else 0))
+        # nothing tracked: a moving blob that was there last scan too (noise jumps about), then the
+        # one closest to us. List order picked wall noise while the chaser drove up (real robot bag)
+        ref = self.ch_est if self.ch_est is not None else me
+        rank, cell, how, group = min(cands, key=lambda c: (
+            c[0], self.ch_est is None and not any(cdist(c[1], q) <= 2 for q in prev),
+            cdist(c[1], ref) if ref is not None else 0))
         if how == "shape":
             tracking = self.ch_est is not None and self.ch_age == 0 and cdist(cell, self.ch_est) <= 2
             confirmed = self.pending is not None and cdist(cell, self.pending) <= 1.5
@@ -422,6 +437,7 @@ class Evader:
         """Update map + chaser estimate from one LiDAR scan given as grid cells.
         Used by the simulator and by the ROS 2 node (truth_cell only for statistics)."""
         self.rays = list(ends)
+        self.me = me
         ch, ch_cells, how = self.perceive_chaser(hits)
         static = hits - ch_cells - self.robot_cells
         if how == "?":
@@ -448,6 +464,26 @@ class Evader:
             self.perc["false"] += ch is not None and ch != truth_cell
         prev = self.ch_est
         if ch is not None:
+            if prev is None or cdist(ch, prev) > 3 + self.ch_age:
+                # a new track, or a jump to another object (outside the tracking gate)
+                self.ch_anchor, self.ch_still, self.ever_moved = ch, 0, False
+            elif ch != prev:
+                self.ever_moved = True
+            if cdist(ch, self.ch_anchor) >= 3:
+                self.ch_anchor, self.ch_still = ch, 0    # got 0.3 m away: really moving
+            else:
+                self.ch_still += 1
+                if self.ch_still >= self.p.get("forget_still", 8):
+                    # seen all the time but stayed put: part of the map, and its cells no longer
+                    # count as motion (real robot bag: dodged a box edge for 12 s while the chaser
+                    # drove into us). A chaser that only stopped is found again once it moves on
+                    x, y = xy(ch)
+                    self.still_cells |= {idx(x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                                         if 0 <= x + dx < W and 0 <= y + dy < H}
+                    self.robot_cells.discard(ch)
+                    self.known.add(ch)
+                    self.ch_est, self.ch_age, self.detect_how, self.ever_moved = None, 0, "", False
+                    return me, prev, None
             self.ch_est, self.ch_pos, self.ch_age = ch, center(ch), 0
             self.detect_how = how
         elif self.ch_est is not None:
@@ -471,8 +507,6 @@ class Evader:
                 return me, None, None
             self.ch_age = min(self.ch_age + 1, 10)   # cap: do not freeze forever
             self.detect_how = "lost"
-        if ch is not None and prev is not None and ch != prev:
-            self.ever_moved = True
         return me, prev, ch
 
     def go_to_goal(self, me):

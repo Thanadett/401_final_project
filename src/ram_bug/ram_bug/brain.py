@@ -472,12 +472,13 @@ class Brain:
         return v, w
 
     def _out(self, v, w, now):
-        # keep each wheel within what the Burger really does (~0.20 m/s): faster requests were not
+        # never ask a wheel more than the Burger really does (~0.20 m/s): such requests were not
         # followed (real robot bag: v=0.15 w=-1.8 asks 0.29 m/s of one wheel -> 0.02 m/s for 8 s).
-        # Give up forward speed first so the turn stays as asked
+        # Clip each wheel, as saturated motors would (keeping the turn instead was worse in the
+        # simulator with the same wheel limit)
         top, half = self.cfg.get("max_wheel", 0.20), 0.5 * self.cfg.get("wheel_base", 0.160)
         if top > 0 and abs(v) + half * abs(w) > top:
-            w = max(-top / half, min(top / half, w))
-            v = math.copysign(max(0.0, top - half * abs(w)), v)
+            vl, vr = (max(-top, min(top, v + k * half * w)) for k in (-1, 1))
+            v, w = 0.5 * (vl + vr), (vr - vl) / (2 * half)
         self.cmd_v, self.cmd_w, self.cmd_t = v, w, now
         return v, w

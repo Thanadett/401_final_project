@@ -464,7 +464,7 @@ class Evader:
             self.perc["false"] += ch is not None and ch != truth_cell
         prev = self.ch_est
         if ch is not None:
-            if prev is None or cdist(ch, prev) > 3 + self.ch_age:
+            if prev is None or self.ch_anchor is None or cdist(ch, prev) > 3 + self.ch_age:
                 # a new track, or a jump to another object (outside the tracking gate)
                 self.ch_anchor, self.ch_still, self.ever_moved = ch, 0, False
             elif ch != prev:

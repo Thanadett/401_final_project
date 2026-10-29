@@ -908,6 +908,7 @@ class Bug2(Evader):
         self.hit, self.hit_d = None, INF
         self.wall, self.side, self.flipped = None, 1, False
         self.wall_ticks, self.wall_far, self.last_cell = 0, 0.0, None
+        self.wall_path, self.rejoins = [], 0  # last tick's boundary-following path, rejoin() in a row
         self.blocked = set()
 
     # ---------- geometry
@@ -1040,6 +1041,7 @@ class Bug2(Evader):
             return False
         self.state, self.hit, self.hit_d, self.wall = "WALL", me, cdist(me, self.goal), wall
         self.wall_ticks, self.wall_far, self.flipped = 0, 0.0, False
+        self.wall_path, self.rejoins = [], 0
         opts = []
         for side in (1, -1):
             n, _ = self.wall_step(me, wall, side)
@@ -1048,12 +1050,20 @@ class Bug2(Evader):
         self.side = min(opts)[2] if opts else 1
         return True
 
+    def rejoin(self, me):
+        """The furthest cell of last tick's boundary path that we can step to and that still has
+        a wall next to it, or None. self.wall is kept: following goes on from there."""
+        legal = neighbours(me, self.blocked, stay=False)
+        for k in range(len(self.wall_path) - 1, -1, -1):        # its first cell too: a cell border
+            c = self.wall_path[k]
+            if c in legal and self.wall_near(c, self.wall) is not None:
+                self.race_path = [me] + self.wall_path[k:]
+                self.wall_path = self.race_path
+                return c
+        return None
+
     def follow_wall(self, me):
         """Returns the next cell, or None when Bug2 left the wall (state changed)."""
-        wall = self.wall_near(me, self.wall)
-        if wall is None:                      # the obstacle vanished from the map (it was noise)
-            self.start_mline(me)
-            return None
         gd = cdist(me, self.goal)
         if me != self.hit and self.mline_dist(me) <= self.p["mline_w"] and gd < self.hit_d - 0.5 \
                 and self.mline_next(me) is not None:
@@ -1063,6 +1073,22 @@ class Bug2(Evader):
             self.start_mline(me)              # the goal is right there in plain view: drive onto it
             self.mode, self.race_path = "MLINE", [me, self.goal]
             return self.goal
+        wall = self.wall_near(me, self.wall)
+        if wall is not None and self.rejoins < 4 and \
+                max(abs(wall[0] - self.wall[0]), abs(wall[1] - self.wall[1])) > 2:
+            # only ANOTHER obstacle next to us: the real robot drifted a cell off the boundary while
+            # turning. Following that one with the same side drove the wrong way round (real robot
+            # bag: target 126 deg behind, ~450 deg of turning). Nothing next to us at all is fine:
+            # a new M-line from here (below) was shorter in the simulator. At most 2 s in a row:
+            # rejoining on every tick could hover there for ever (one simulator round)
+            back = self.rejoin(me)
+            if back is not None:
+                self.rejoins += 1
+                self.wall_ticks += 1
+                return back
+        if wall is None:                      # the obstacle vanished from the map (it was noise)
+            self.start_mline(me)
+            return None
         if me != self.last_cell:
             self.wall_ticks += 1
             self.wall_far = max(self.wall_far, cdist(me, self.hit))
@@ -1084,6 +1110,7 @@ class Bug2(Evader):
             n, state["wall"] = self.wall_step(c, state["wall"], self.side)
             return n
         self.race_path = [me] + self.path_ahead(nxt, step, 3)
+        self.wall_path, self.rejoins = self.race_path, 0
         return nxt
 
     def act(self, rnd):

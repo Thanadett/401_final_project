@@ -208,6 +208,30 @@ def test_bug2_rushes_to_a_near_goal():
     assert pl.mode == "AVOID", pl.mode
 
 
+def test_bug2_wall_follow_survives_a_drift():
+    """Real robot bag: following a box east through a 0.2 m gap between two boxes, the robot
+    drifted one cell south while turning. The nearest blocked cell was then the OTHER box, and
+    following it with the same side drove west, 126 deg behind us (~450 deg of extra turning)."""
+    from ram_bug.brain import View
+    b = Brain(dict(capture_r=0.30, start_x=0.0, start_y=0.0, start_yaw=0.0, algorithm="bug2",
+                   detect_chaser="off"))
+    b.set_goal(2.05, 1.15)
+    pl = b.planner
+    boxes = {eg.idx(x, y) for x in range(15, 19) for y in range(19, 21)} | \
+            {eg.idx(x, y) for x in range(12, 17) for y in range(13, 15)}
+    pl.set_scan(boxes, set())
+    view = View((14.5, 17.5), pl.known)
+    pl.act(view)                                     # map: inflated boxes, free gap at y = 16..17
+    me = eg.idx(14, 17)
+    pl.state, pl.m_start, pl.hit, pl.hit_d = "WALL", eg.idx(10, 24), me, eg.cdist(me, pl.goal)
+    pl.wall, pl.side, pl.wall_ticks, pl.wall_far = (15, 18), -1, 0, 0.0
+    nxt = pl.decide(view, me)
+    assert pl.mode == "WALL" and eg.xy(nxt) == (15, 17), (pl.mode, eg.xy(nxt))
+    pl.last_cell = me
+    nxt = pl.decide(view, eg.idx(14, 16))            # drifted a cell off the box we follow
+    assert pl.mode == "WALL" and eg.xy(nxt)[0] > 14, (pl.mode, eg.xy(nxt))
+
+
 def body_touches(x, y, yaw, obst, r=0.09):
     """Real Burger footprint: ~0.09 m around the LDS, which sits 0.032 m behind base_footprint."""
     cx, cy = x - 0.032 * math.cos(yaw), y - 0.032 * math.sin(yaw)
